@@ -1942,12 +1942,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['login'])) {
                 <p class="footer-description">
                     Your premier destination for premium motorcycle helmets and gears. Ride safe, ride stylish.
                 </p>
-                <div class="social-links">
-                    <a href="#" class="social-link"><i class="fab fa-facebook-f"></i></a>
-                    <a href="#" class="social-link"><i class="fab fa-instagram"></i></a>
-                    <a href="#" class="social-link"><i class="fab fa-twitter"></i></a>
-                    <a href="#" class="social-link"><i class="fab fa-youtube"></i></a>
-                </div>
+               
             </div>
 
             <div class="footer-col">
@@ -1973,9 +1968,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['login'])) {
             <div class="footer-col">
                 <h3 class="footer-title">CONTACT</h3>
                 <ul class="footer-contact">
-                    <li><i class="fas fa-map-marker-alt"></i> Manila, Philippines</li>
-                    <li><i class="fas fa-phone"></i> +63 912 345 6789</li>
-                    <li><i class="fas fa-envelope"></i> info@ridershub.com</li>
+                    <li><i class="fas fa-map-marker-alt"></i> 43 paso de blas Valenzuela city</li>
+                    <li><i class="fas fa-phone"></i> +63 956 966 3196</li>
+                    <li><i class="fas fa-envelope"></i>kbridershub@gmail.com</li>
                 </ul>
             </div>
         </div>

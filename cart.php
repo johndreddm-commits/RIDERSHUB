@@ -19,10 +19,46 @@ $cart_total = 0;
 $cart_count = 0;
 $cart_items = $_SESSION['cart'] ?? [];
 
-foreach($cart_items as $item) {
-    $cart_total += $item['price'] * $item['quantity'];
-    $cart_count += $item['quantity'];
+// Update cart items with latest inventory data
+$updated_cart = [];
+foreach($cart_items as $key => $item) {
+    $product_id = $item['product_id'];
+    
+    // Get latest inventory data for each cart item
+    $query = "SELECT p.*, 
+                     COALESCE(i.quantity, p.quantity, p.stock, 0) as total_stock,
+                     COALESCE(i.reserved_quantity, 0) as reserved_stock,
+                     GREATEST(0, COALESCE(i.quantity, p.quantity, p.stock, 0) - COALESCE(i.reserved_quantity, 0)) as available_stock
+              FROM products p 
+              LEFT JOIN inventory i ON p.id = i.product_id 
+              WHERE p.id = ? AND p.status = 'active'";
+    $stmt = mysqli_prepare($conn, $query);
+    mysqli_stmt_bind_param($stmt, "i", $product_id);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    $product = mysqli_fetch_assoc($result);
+    
+    if($product) {
+        $item['available_stock'] = $product['available_stock'] ?? 0;
+        $item['total_stock'] = $product['total_stock'] ?? 0;
+        $item['reserved_stock'] = $product['reserved_stock'] ?? 0;
+        $item['price'] = $product['price'];
+        
+        // If quantity exceeds available stock, adjust it
+        if($item['quantity'] > $item['available_stock']) {
+            $item['quantity'] = max(0, $item['available_stock']);
+        }
+        
+        $updated_cart[$key] = $item;
+        $cart_total += $item['price'] * $item['quantity'];
+        $cart_count += $item['quantity'];
+    } else {
+        // Product no longer active, skip it
+        continue;
+    }
 }
+$_SESSION['cart'] = $updated_cart;
+$cart_items = $updated_cart;
 
 // Create array of cart items for JavaScript
 $js_cart_items = [];
@@ -35,27 +71,48 @@ foreach($cart_items as $key => $item) {
         'size' => $item['size'],
         'quantity' => $item['quantity'],
         'price' => $item['price'],
-        'image' => $item['image']
+        'image' => $item['image'],
+        'available_stock' => $item['available_stock'] ?? 0,
+        'total_stock' => $item['total_stock'] ?? 0,
+        'reserved_stock' => $item['reserved_stock'] ?? 0
     ];
 }
 
-// Handle delete reservation action - HARD DELETE
+// Handle delete reservation action
 if(isset($_GET['delete_reservation'])) {
     $reservation_id = (int)$_GET['delete_reservation'];
     $user_id = $_SESSION['id'] ?? 0;
     
     // Verify the reservation belongs to the user
-    $check_query = "SELECT id FROM reservations WHERE id = $reservation_id AND user_id = $user_id";
-    $check_result = mysqli_query($conn, $check_query);
+    $check_query = "SELECT id, product_id, quantity, status, ticket_number FROM reservations WHERE id = ? AND user_id = ?";
+    $check_stmt = mysqli_prepare($conn, $check_query);
+    mysqli_stmt_bind_param($check_stmt, "ii", $reservation_id, $user_id);
+    mysqli_stmt_execute($check_stmt);
+    $check_result = mysqli_stmt_get_result($check_stmt);
+    $reservation = mysqli_fetch_assoc($check_result);
     
-    if(mysqli_num_rows($check_result) > 0) {
-        // HARD DELETE - Completely remove from database
-        $delete_query = "DELETE FROM reservations WHERE id = $reservation_id AND user_id = $user_id";
-        
-        if(mysqli_query($conn, $delete_query)) {
-            $_SESSION['message'] = "Reservation deleted successfully!";
+    if($reservation) {
+        if($reservation['status'] == 'CONFIRMED') {
+            $_SESSION['error'] = "Cannot delete confirmed reservations. Please contact support.";
         } else {
-            $_SESSION['error'] = "Failed to delete reservation.";
+            // HARD DELETE - Only for pending/cancelled reservations
+            $delete_query = "DELETE FROM reservations WHERE id = ? AND user_id = ?";
+            $delete_stmt = mysqli_prepare($conn, $delete_query);
+            mysqli_stmt_bind_param($delete_stmt, "ii", $reservation_id, $user_id);
+            
+            if(mysqli_stmt_execute($delete_stmt)) {
+                // Add notification for deleted reservation
+                $notif_query = "INSERT INTO notifications (user_id, title, message, type, reservation_code, created_at) 
+                                VALUES (?, 'Reservation Deleted', ?, 'cancelled', ?, NOW())";
+                $notif_msg = "Your reservation for " . $reservation['ticket_number'] . " has been deleted.";
+                $notif_stmt = mysqli_prepare($conn, $notif_query);
+                mysqli_stmt_bind_param($notif_stmt, "iss", $user_id, $notif_msg, $reservation['ticket_number']);
+                mysqli_stmt_execute($notif_stmt);
+                
+                $_SESSION['message'] = "Reservation deleted successfully!";
+            } else {
+                $_SESSION['error'] = "Failed to delete reservation.";
+            }
         }
     } else {
         $_SESSION['error'] = "Reservation not found or you don't have permission to delete it.";
@@ -65,22 +122,109 @@ if(isset($_GET['delete_reservation'])) {
     exit;
 }
 
-// Fetch user's recent reservations
+// Mark notifications as read
+if(isset($_GET['mark_read'])) {
+    $notification_id = (int)$_GET['mark_read'];
+    $user_id = $_SESSION['id'] ?? 0;
+    
+    if($notification_id > 0 && $user_id > 0) {
+        $update_query = "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?";
+        $update_stmt = mysqli_prepare($conn, $update_query);
+        mysqli_stmt_bind_param($update_stmt, "ii", $notification_id, $user_id);
+        mysqli_stmt_execute($update_stmt);
+    }
+    header("Location: cart.php");
+    exit;
+}
+
+// Mark all notifications as read
+if(isset($_GET['mark_all_read'])) {
+    $user_id = $_SESSION['id'] ?? 0;
+    
+    if($user_id > 0) {
+        $update_query = "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0";
+        $update_stmt = mysqli_prepare($conn, $update_query);
+        mysqli_stmt_bind_param($update_stmt, "i", $user_id);
+        if(mysqli_stmt_execute($update_stmt)) {
+            $_SESSION['message'] = "All notifications marked as read!";
+        } else {
+            $_SESSION['error'] = "Failed to mark notifications as read.";
+        }
+    }
+    
+    header("Location: cart.php");
+    exit;
+}
+
+// Fetch user's notifications
 $user_id = $_SESSION['id'] ?? 0;
+$notifications_query = "SELECT * FROM notifications 
+                       WHERE user_id = ? 
+                       ORDER BY created_at DESC 
+                       LIMIT 20";
+$notifications_stmt = mysqli_prepare($conn, $notifications_query);
+mysqli_stmt_bind_param($notifications_stmt, "i", $user_id);
+mysqli_stmt_execute($notifications_stmt);
+$notifications_result = mysqli_stmt_get_result($notifications_stmt);
+$unread_count = 0;
+
+if ($notifications_result && mysqli_num_rows($notifications_result) > 0) {
+    $unread_query = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0";
+    $unread_stmt = mysqli_prepare($conn, $unread_query);
+    mysqli_stmt_bind_param($unread_stmt, "i", $user_id);
+    mysqli_stmt_execute($unread_stmt);
+    $unread_result = mysqli_stmt_get_result($unread_stmt);
+    if ($unread_result) {
+        $unread_count = mysqli_fetch_assoc($unread_result)['count'];
+    }
+} else {
+    // Create notifications table if it doesn't exist
+    $create_table = "CREATE TABLE IF NOT EXISTS notifications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        type VARCHAR(50) DEFAULT 'general',
+        reservation_code VARCHAR(50),
+        is_read TINYINT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX (user_id),
+        INDEX (is_read)
+    )";
+    mysqli_query($conn, $create_table);
+}
+
+// Fetch user's recent reservations with inventory data
 $recent_reservations_query = "SELECT r.*, p.name as product_name, p.image as product_image, p.price, 
-                              p.colors, p.sizes, b.brand_name 
+                              p.colors, p.sizes, b.brand_name,
+                              COALESCE(i.quantity, p.quantity, p.stock, 0) as current_stock,
+                              COALESCE(i.reserved_quantity, 0) as current_reserved
                               FROM reservations r 
                               LEFT JOIN products p ON r.product_id = p.id 
                               LEFT JOIN brands b ON p.brand_id = b.id 
-                              WHERE r.user_id = $user_id 
+                              LEFT JOIN inventory i ON p.id = i.product_id 
+                              WHERE r.user_id = ? 
                               ORDER BY r.created_at DESC 
                               LIMIT 10";
 
-$recent_reservations_result = mysqli_query($conn, $recent_reservations_query);
-if (!$recent_reservations_result) {
-    // Table might not exist yet, create a dummy empty result
-    $recent_reservations_result = false;
-}
+$recent_reservations_stmt = mysqli_prepare($conn, $recent_reservations_query);
+mysqli_stmt_bind_param($recent_reservations_stmt, "i", $user_id);
+mysqli_stmt_execute($recent_reservations_stmt);
+$recent_reservations_result = mysqli_stmt_get_result($recent_reservations_stmt);
+
+// Get low stock warnings for user
+$low_stock_query = "SELECT COUNT(DISTINCT r.product_id) as low_stock_count
+                    FROM reservations r
+                    JOIN products p ON r.product_id = p.id
+                    LEFT JOIN inventory i ON p.id = i.product_id
+                    WHERE r.user_id = ? 
+                    AND r.status = 'PENDING'
+                    AND GREATEST(0, COALESCE(i.quantity, p.quantity, p.stock, 0) - COALESCE(i.reserved_quantity, 0)) <= 5";
+$low_stock_stmt = mysqli_prepare($conn, $low_stock_query);
+mysqli_stmt_bind_param($low_stock_stmt, "i", $user_id);
+mysqli_stmt_execute($low_stock_stmt);
+$low_stock_result = mysqli_stmt_get_result($low_stock_stmt);
+$low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -106,7 +250,7 @@ if (!$recent_reservations_result) {
             overflow-x: hidden;
         }
         
-        /* ====== NAVIGATION STYLES - EXACTLY LIKE INDEX ====== */
+        /* ====== NAVIGATION STYLES ====== */
         .nav {
             position: fixed;
             top: 0;
@@ -121,6 +265,22 @@ if (!$recent_reservations_result) {
             backdrop-filter: blur(15px);
             border-bottom: 2px solid #ff0000;
             box-shadow: 0 5px 30px rgba(255, 0, 0, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .nav.scrolled {
+            padding: 10px 60px;
+            background: rgba(0, 0, 0, 0.98);
+            box-shadow: 0 5px 40px rgba(255, 0, 0, 0.3);
+        }
+
+        .nav.scrolled .nav-logo {
+            width: 55px;
+            height: 55px;
+        }
+
+        .nav.scrolled .nav-title {
+            font-size: 24px;
         }
 
         .nav-left {
@@ -166,10 +326,31 @@ if (!$recent_reservations_result) {
             display: flex;
             list-style: none;
             gap: 30px;
+            align-items: center;
         }
 
         .nav-menu li {
             position: relative;
+            animation: fadeInNav 0.5s ease forwards;
+            opacity: 0;
+        }
+
+        .nav-menu li:nth-child(1) { animation-delay: 0.1s; }
+        .nav-menu li:nth-child(2) { animation-delay: 0.15s; }
+        .nav-menu li:nth-child(3) { animation-delay: 0.2s; }
+        .nav-menu li:nth-child(4) { animation-delay: 0.25s; }
+        .nav-menu li:nth-child(5) { animation-delay: 0.3s; }
+        .nav-menu li:nth-child(6) { animation-delay: 0.35s; }
+
+        @keyframes fadeInNav {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .nav-menu li a {
@@ -180,6 +361,27 @@ if (!$recent_reservations_result) {
             padding: 8px 12px;
             display: block;
             cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .nav-menu li a::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 0, 0, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+            z-index: -1;
+        }
+
+        .nav-menu li a:hover::before {
+            width: 200px;
+            height: 200px;
         }
 
         .nav-menu li a:hover {
@@ -188,6 +390,11 @@ if (!$recent_reservations_result) {
 
         .nav-menu li a i {
             margin-right: 5px;
+            transition: transform 0.3s ease;
+        }
+
+        .nav-menu li a:hover i {
+            transform: rotate(360deg);
         }
 
         /* Active Navigation Style */
@@ -205,6 +412,18 @@ if (!$recent_reservations_result) {
             height: 2px;
             background: red;
             border-radius: 2px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                width: 0;
+                opacity: 0;
+            }
+            to {
+                width: calc(100% - 24px);
+                opacity: 1;
+            }
         }
 
         /* Dropdown Menu */
@@ -225,6 +444,18 @@ if (!$recent_reservations_result) {
             z-index: 1000;
             backdrop-filter: blur(15px);
             box-shadow: 0 10px 30px rgba(255, 0, 0, 0.2);
+            animation: dropdownFade 0.3s ease;
+        }
+
+        @keyframes dropdownFade {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .dropdown:hover .dropdown-menu {
@@ -242,6 +473,24 @@ if (!$recent_reservations_result) {
             transition: all 0.3s ease;
             font-size: 0.95rem;
             white-space: nowrap;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .dropdown-menu li a::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255, 0, 0, 0.1);
+            transition: width 0.3s ease;
+            z-index: -1;
+        }
+
+        .dropdown-menu li a:hover::before {
+            width: 100%;
         }
 
         .dropdown-menu li a:hover {
@@ -256,13 +505,11 @@ if (!$recent_reservations_result) {
             font-size: 0.9rem;
             color: red;
             opacity: 0.7;
+            transition: transform 0.3s ease;
         }
 
-        /* Active dropdown item */
-        .dropdown-menu li.active > a {
-            color: red;
-            background: rgba(255, 0, 0, 0.1);
-            padding-left: 25px;
+        .dropdown-menu li a:hover i {
+            transform: scale(1.2);
         }
 
         /* Cart Count */
@@ -277,6 +524,239 @@ if (!$recent_reservations_result) {
             text-align: center;
             font-family: 'Orbitron', sans-serif;
             margin-left: 5px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.1);
+            }
+        }
+
+        /* Low Stock Warning */
+        .low-stock-warning {
+            background: #ff9900;
+            color: #000;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-left: 10px;
+            animation: pulse 2s infinite;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* NOTIFICATION BELL STYLES - MOVED TO RIGHT SIDE */
+        .notification-container {
+            position: relative;
+            display: inline-block;
+            margin-left: 15px;
+        }
+
+        .notification-bell {
+            position: relative;
+            cursor: pointer;
+            color: white;
+            font-size: 1.3rem;
+            transition: all 0.3s ease;
+        }
+
+        .notification-bell:hover {
+            color: red;
+            transform: rotate(15deg);
+        }
+
+        .notification-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: red;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: bold;
+            min-width: 20px;
+            height: 20px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 5px;
+            border: 2px solid #000;
+            animation: pulse 2s infinite;
+        }
+
+        /* NOTIFICATION DROPDOWN */
+        .notification-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            width: 380px;
+            background: #111;
+            border: 1px solid red;
+            border-radius: 12px;
+            margin-top: 15px;
+            display: none;
+            z-index: 1001;
+            box-shadow: 0 10px 40px rgba(255, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .notification-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+        }
+
+        .notification-header h3 {
+            color: red;
+            font-size: 1.1rem;
+            font-family: 'Audiowide', sans-serif;
+        }
+
+        .mark-all-read {
+            background: none;
+            border: none;
+            color: #888;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: color 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            text-decoration: none;
+        }
+
+        .mark-all-read:hover {
+            color: red;
+        }
+
+        .notification-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .notification-list::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .notification-list::-webkit-scrollbar-thumb {
+            background: red;
+            border-radius: 10px;
+        }
+
+        .notification-item {
+            display: flex;
+            gap: 15px;
+            padding: 15px 20px;
+            border-bottom: 1px solid #222;
+            transition: all 0.3s ease;
+            position: relative;
+            cursor: pointer;
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .notification-item:hover {
+            background: #1a1a1a;
+        }
+
+        .notification-item.unread {
+            background: rgba(255, 0, 0, 0.05);
+            border-left: 3px solid red;
+        }
+
+        .notification-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: red;
+            font-size: 1.2rem;
+        }
+
+        .notification-content {
+            flex: 1;
+        }
+
+        .notification-title {
+            color: red;
+            font-weight: bold;
+            font-size: 0.95rem;
+            margin-bottom: 5px;
+        }
+
+        .notification-message {
+            color: #ccc;
+            font-size: 0.85rem;
+            line-height: 1.4;
+        }
+
+        .notification-time {
+            color: #666;
+            font-size: 0.7rem;
+            margin-top: 5px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .notification-status {
+            color: #ffc107;
+            font-size: 0.75rem;
+        }
+
+        .notification-empty {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+        }
+
+        .notification-empty i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        /* Status Badge Colors */
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin-right: 5px;
+        }
+
+        .status-pending {
+            background: #ffc107;
+            color: #000;
+        }
+
+        .status-confirmed {
+            background: #28a745;
+            color: #fff;
+        }
+
+        .status-completed {
+            background: #007bff;
+            color: #fff;
+        }
+
+        .status-cancelled {
+            background: #dc3545;
+            color: #fff;
         }
 
         /* Mobile Navigation */
@@ -288,6 +768,16 @@ if (!$recent_reservations_result) {
             font-size: 24px;
             cursor: pointer;
             padding: 10px;
+            transition: transform 0.3s ease;
+        }
+        
+        .mobile-menu-btn:hover {
+            transform: scale(1.1);
+            color: red;
+        }
+        
+        .mobile-menu-btn:active {
+            transform: scale(0.95);
         }
         
         .close-menu-btn {
@@ -301,6 +791,12 @@ if (!$recent_reservations_result) {
             font-size: 28px;
             cursor: pointer;
             z-index: 1001;
+            transition: all 0.3s ease;
+        }
+        
+        .close-menu-btn:hover {
+            color: red;
+            transform: rotate(90deg);
         }
         
         .mobile-search-btn {
@@ -311,6 +807,12 @@ if (!$recent_reservations_result) {
             font-size: 20px;
             cursor: pointer;
             padding: 10px;
+            transition: all 0.3s ease;
+        }
+        
+        .mobile-search-btn:hover {
+            color: red;
+            transform: scale(1.1);
         }
         
         .mobile-search-container {
@@ -323,7 +825,18 @@ if (!$recent_reservations_result) {
             background: rgba(0, 0, 0, 0.95);
             z-index: 999;
             border-bottom: 1px solid red;
-            backdrop-filter: blur(15px);
+            animation: slideDown 0.3s ease;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
         .mobile-search-input {
@@ -335,142 +848,13 @@ if (!$recent_reservations_result) {
             color: white;
             font-family: 'Orbitron', sans-serif;
             font-size: 1rem;
+            transition: all 0.3s ease;
         }
         
         .mobile-search-input:focus {
             outline: none;
             box-shadow: 0 0 15px rgba(255, 0, 0, 0.3);
-        }
-
-        /* Quick Product Links */
-        .quick-product-link {
-            display: inline-block;
-            margin-left: 20px;
-            color: #ff6666;
-            font-size: 0.85rem;
-            text-decoration: none;
-            border-left: 1px solid #333;
-            padding-left: 15px;
-        }
-        
-        .quick-product-link:hover {
-            color: red;
-            text-decoration: underline;
-        }
-
-        /* Responsive Navigation */
-        @media (max-width: 992px) {
-            .nav {
-                padding: 15px 30px;
-            }
-            
-            .nav-logo {
-                width: 55px;
-                height: 55px;
-            }
-            
-            .nav-title {
-                font-size: 24px;
-            }
-            
-            .nav-menu {
-                gap: 20px;
-            }
-        }
-        
-        @media (max-width: 768px) {
-            .nav {
-                padding: 15px 20px;
-            }
-            
-            .nav-logo {
-                width: 45px;
-                height: 45px;
-            }
-            
-            .nav-title {
-                font-size: 20px;
-                letter-spacing: 2px;
-            }
-            
-            .mobile-menu-btn,
-            .mobile-search-btn {
-                display: block;
-            }
-            
-            .nav-menu {
-                position: fixed;
-                top: 0;
-                right: -100%;
-                width: 300px;
-                height: 100vh;
-                background: rgba(0, 0, 0, 0.98);
-                backdrop-filter: blur(15px);
-                flex-direction: column;
-                padding: 80px 25px 30px;
-                transition: right 0.3s ease;
-                z-index: 1000;
-                border-left: 2px solid red;
-                overflow-y: auto;
-            }
-            
-            .nav-menu.active {
-                right: 0;
-            }
-            
-            .nav-menu li {
-                margin: 5px 0;
-            }
-            
-            .nav-menu li a {
-                padding: 15px 20px;
-                font-size: 1.1rem;
-            }
-            
-            .dropdown-menu {
-                position: static;
-                background: rgba(30, 30, 30, 0.95);
-                border: 1px solid #444;
-                margin: 5px 0 5px 20px;
-                display: none;
-                min-width: 100%;
-            }
-            
-            .dropdown-menu li a {
-                white-space: normal;
-            }
-            
-            .dropdown.active .dropdown-menu {
-                display: block;
-            }
-            
-            .close-menu-btn {
-                display: block;
-            }
-            
-            .mobile-search-container {
-                top: 80px;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .nav {
-                padding: 12px 15px;
-            }
-            
-            .nav-logo {
-                width: 45px;
-                height: 45px;
-            }
-            
-            .nav-title {
-                font-size: 20px;
-                letter-spacing: 2px;
-            }
-            
-            .mobile-search-container {
-                top: 70px;
-            }
+            transform: scale(1.02);
         }
 
         /* Recent Reservations Styles */
@@ -490,11 +874,16 @@ if (!$recent_reservations_result) {
             text-align: center;
             border-bottom: 2px solid red;
             padding-bottom: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
         }
 
         .recent-reservations-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
@@ -600,6 +989,12 @@ if (!$recent_reservations_result) {
             display: inline-block;
         }
 
+        .stock-info-small {
+            font-size: 0.7rem;
+            color: #ffaa00;
+            display: block;
+        }
+
         .reservation-actions {
             display: flex;
             gap: 8px;
@@ -620,6 +1015,26 @@ if (!$recent_reservations_result) {
             display: inline-flex;
             align-items: center;
             gap: 5px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .reserve-again-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .reserve-again-btn:hover::before {
+            width: 200px;
+            height: 200px;
         }
 
         .reserve-again-btn:hover {
@@ -643,6 +1058,26 @@ if (!$recent_reservations_result) {
             display: inline-flex;
             align-items: center;
             gap: 5px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .delete-reservation-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(220, 53, 69, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .delete-reservation-btn:hover::before {
+            width: 200px;
+            height: 200px;
         }
 
         .delete-reservation-btn:hover {
@@ -671,36 +1106,6 @@ if (!$recent_reservations_result) {
             color: #333;
         }
 
-        .status-badge {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 0.7rem;
-            font-weight: bold;
-            text-transform: uppercase;
-            margin-right: 5px;
-        }
-
-        .status-pending {
-            background: #ffc107;
-            color: #000;
-        }
-
-        .status-confirmed {
-            background: #28a745;
-            color: #fff;
-        }
-
-        .status-completed {
-            background: #007bff;
-            color: #fff;
-        }
-
-        .status-cancelled {
-            background: #6c757d;
-            color: #fff;
-        }
-
         /* Cart Container */
         .cart-container {
             max-width: 1200px;
@@ -716,6 +1121,11 @@ if (!$recent_reservations_result) {
             color: red;
             margin-bottom: 40px;
             text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
         }
         
         .cart-items {
@@ -732,6 +1142,7 @@ if (!$recent_reservations_result) {
             border-bottom: 1px solid #333;
             gap: 20px;
             flex-wrap: wrap;
+            position: relative;
         }
         
         .cart-item:last-child {
@@ -794,10 +1205,35 @@ if (!$recent_reservations_result) {
             border-radius: 5px;
             cursor: pointer;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .quantity-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .quantity-btn:hover::before {
+            width: 60px;
+            height: 60px;
         }
         
-        .quantity-btn:hover {
+        .quantity-btn:hover:not(:disabled) {
             background: red;
+        }
+
+        .quantity-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
         }
         
         .quantity-input {
@@ -863,11 +1299,36 @@ if (!$recent_reservations_result) {
             cursor: pointer;
             font-weight: bold;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .reserve-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .reserve-btn:hover::before {
+            width: 400px;
+            height: 400px;
         }
         
-        .reserve-btn:hover {
+        .reserve-btn:hover:not(:disabled) {
             background: #cc0000;
             transform: translateY(-2px);
+        }
+
+        .reserve-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
         }
         
         .empty-cart {
@@ -880,6 +1341,7 @@ if (!$recent_reservations_result) {
             font-size: 5rem;
             margin-bottom: 20px;
             color: #333;
+            animation: bounce 2s infinite;
         }
         
         .empty-cart h2 {
@@ -895,6 +1357,26 @@ if (!$recent_reservations_result) {
             border-radius: 8px;
             margin-top: 20px;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .continue-shopping::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .continue-shopping:hover::before {
+            width: 300px;
+            height: 300px;
         }
         
         .continue-shopping:hover {
@@ -950,6 +1432,16 @@ if (!$recent_reservations_result) {
             height: 100%; 
             background-color: rgba(0,0,0,0.85); 
             backdrop-filter: blur(8px); 
+            animation: modalFadeIn 0.3s ease;
+        }
+
+        @keyframes modalFadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
         }
         
         .modal-content { 
@@ -964,7 +1456,19 @@ if (!$recent_reservations_result) {
             border-radius: 15px; 
             color: white; 
             font-family: 'Orbitron', sans-serif; 
-            position: relative; 
+            position: relative;
+            animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
         .modal-content::-webkit-scrollbar { 
@@ -997,6 +1501,7 @@ if (!$recent_reservations_result) {
             border-radius: 8px; 
             box-sizing: border-box; 
             font-family: 'Orbitron', sans-serif;
+            transition: all 0.3s ease;
         }
 
         #reservationForm input:focus, 
@@ -1004,7 +1509,8 @@ if (!$recent_reservations_result) {
         #reserveAgainForm input:focus, 
         #reserveAgainForm select:focus { 
             border-color: red; 
-            outline: none; 
+            outline: none;
+            transform: scale(1.02);
         }
         
         .submit-res-btn { 
@@ -1020,10 +1526,35 @@ if (!$recent_reservations_result) {
             font-family: 'Orbitron', sans-serif;
             font-size: 1rem;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .submit-res-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .submit-res-btn:hover::before {
+            width: 500px;
+            height: 500px;
         }
         
-        .submit-res-btn:hover {
+        .submit-res-btn:hover:not(:disabled) {
             background: #cc0000;
+        }
+
+        .submit-res-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
         }
         
         .selection-row { 
@@ -1046,6 +1577,22 @@ if (!$recent_reservations_result) {
             display: inline-block;
             margin-bottom: 10px;
             border: 1px solid #00ff0033;
+            transition: all 0.3s ease;
+        }
+
+        .stock-tag:hover {
+            transform: scale(1.05);
+            background: rgba(0, 255, 0, 0.15);
+        }
+
+        .stock-tag.low-stock {
+            color: #ff9900;
+            border-color: #ff990033;
+        }
+
+        .stock-tag.out-of-stock {
+            color: #ff0000;
+            border-color: #ff000033;
         }
         
         .close-modal {
@@ -1056,10 +1603,12 @@ if (!$recent_reservations_result) {
             font-size: 28px;
             font-weight: bold;
             cursor: pointer;
+            transition: all 0.3s ease;
         }
         
         .close-modal:hover {
             color: red;
+            transform: rotate(90deg);
         }
         
         .modal h2 {
@@ -1077,10 +1626,35 @@ if (!$recent_reservations_result) {
             cursor: pointer;
             font-size: 0.9rem;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .reserve-item-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .reserve-item-btn:hover::before {
+            width: 150px;
+            height: 150px;
         }
         
-        .reserve-item-btn:hover {
+        .reserve-item-btn:hover:not(:disabled) {
             background: #cc0000;
+        }
+
+        .reserve-item-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
         }
         
         /* RESERVE ALL MODAL STYLES */
@@ -1113,6 +1687,12 @@ if (!$recent_reservations_result) {
             display: flex;
             align-items: center;
             gap: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .cart-item-preview:hover {
+            transform: translateX(5px);
+            border-color: red;
         }
         
         .cart-item-preview img {
@@ -1152,6 +1732,12 @@ if (!$recent_reservations_result) {
             padding: 3px 8px;
             border-radius: 12px;
             font-size: 0.8rem;
+        }
+
+        .cart-item-preview-stock {
+            font-size: 0.7rem;
+            color: #ffaa00;
+            margin-top: 2px;
         }
         
         .reservation-summary {
@@ -1205,11 +1791,13 @@ if (!$recent_reservations_result) {
             color: white;
             border-radius: 5px;
             font-family: 'Orbitron', sans-serif;
+            transition: all 0.3s ease;
         }
-        
+
         .customer-details input:focus {
             border-color: red;
             outline: none;
+            transform: scale(1.02);
         }
         
         .modal-actions {
@@ -1226,6 +1814,26 @@ if (!$recent_reservations_result) {
             cursor: pointer;
             font-family: 'Orbitron', sans-serif;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .modal-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .modal-btn:hover::before {
+            width: 300px;
+            height: 300px;
         }
         
         .modal-btn-primary {
@@ -1233,9 +1841,14 @@ if (!$recent_reservations_result) {
             color: white;
         }
         
-        .modal-btn-primary:hover {
+        .modal-btn-primary:hover:not(:disabled) {
             background: #cc0000;
             transform: translateY(-2px);
+        }
+
+        .modal-btn-primary:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
         }
         
         .modal-btn-secondary {
@@ -1276,6 +1889,12 @@ if (!$recent_reservations_result) {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            transition: all 0.3s ease;
+        }
+
+        .ticket-item:hover {
+            transform: translateX(5px);
+            border-color: red;
         }
         
         .ticket-number {
@@ -1288,7 +1907,8 @@ if (!$recent_reservations_result) {
             color: #ccc;
             font-size: 0.8rem;
         }
-                /* ===== FOOTER SECTION ===== */
+
+        /* Footer Styles */
         .footer {
             background: #111;
             border-top: 2px solid red;
@@ -1312,18 +1932,47 @@ if (!$recent_reservations_result) {
             display: flex;
             flex-direction: column;
             gap: 20px;
+            animation: slideUp 0.5s ease forwards;
+            animation-delay: calc(0.1s * var(--i));
+            opacity: 0;
+        }
+
+        .footer-col:nth-child(1) { --i: 1; }
+        .footer-col:nth-child(2) { --i: 2; }
+        .footer-col:nth-child(3) { --i: 3; }
+        .footer-col:nth-child(4) { --i: 4; }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .footer-logo {
             display: flex;
             align-items: center;
             gap: 10px;
+            transition: transform 0.3s ease;
+        }
+
+        .footer-logo:hover {
+            transform: scale(1.05);
         }
 
         .footer-logo img {
             width: 50px;
             height: 50px;
             filter: drop-shadow(0 0 10px rgba(255, 0, 0, 0.5));
+            transition: all 0.3s ease;
+        }
+
+        .footer-logo:hover img {
+            filter: drop-shadow(0 0 20px rgba(255, 0, 0, 0.8));
         }
 
         .footer-brand {
@@ -1339,6 +1988,11 @@ if (!$recent_reservations_result) {
             font-size: 0.9rem;
             line-height: 1.6;
             margin-bottom: 10px;
+            transition: color 0.3s ease;
+        }
+
+        .footer-description:hover {
+            color: #aaa;
         }
 
         .social-links {
@@ -1358,11 +2012,31 @@ if (!$recent_reservations_result) {
             color: white;
             text-decoration: none;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .social-link::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .social-link:hover::before {
+            width: 80px;
+            height: 80px;
         }
 
         .social-link:hover {
             background: red;
-            transform: translateY(-3px);
+            transform: translateY(-5px) scale(1.1);
             border-color: red;
         }
 
@@ -1383,6 +2057,11 @@ if (!$recent_reservations_result) {
             width: 50px;
             height: 2px;
             background: red;
+            transition: width 0.3s ease;
+        }
+
+        .footer-col:hover .footer-title::after {
+            width: 80px;
         }
 
         .footer-links {
@@ -1404,11 +2083,16 @@ if (!$recent_reservations_result) {
         .footer-links li a i {
             font-size: 0.8rem;
             color: red;
+            transition: transform 0.3s ease;
         }
 
         .footer-links li a:hover {
             color: red;
             transform: translateX(5px);
+        }
+
+        .footer-links li a:hover i {
+            transform: rotate(360deg);
         }
 
         .footer-contact {
@@ -1424,12 +2108,22 @@ if (!$recent_reservations_result) {
             gap: 10px;
             color: #888;
             font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .footer-contact li:hover {
+            transform: translateX(5px);
         }
 
         .footer-contact li i {
             color: red;
             font-size: 1.1rem;
             margin-top: 3px;
+            transition: transform 0.3s ease;
+        }
+
+        .footer-contact li:hover i {
+            transform: scale(1.2);
         }
 
         .footer-contact li span {
@@ -1474,11 +2168,13 @@ if (!$recent_reservations_result) {
             color: white;
             font-family: 'Orbitron', sans-serif;
             font-size: 0.9rem;
+            transition: all 0.3s ease;
         }
 
         .newsletter-form input:focus {
             outline: none;
             border-color: red;
+            transform: scale(1.02);
         }
 
         .newsletter-form button {
@@ -1492,6 +2188,26 @@ if (!$recent_reservations_result) {
             font-family: 'Orbitron', sans-serif;
             transition: all 0.3s ease;
             white-space: nowrap;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .newsletter-form button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .newsletter-form button:hover::before {
+            width: 400px;
+            height: 400px;
         }
 
         .newsletter-form button:hover {
@@ -1512,6 +2228,11 @@ if (!$recent_reservations_result) {
         .copyright {
             color: #666;
             font-size: 0.9rem;
+            transition: color 0.3s ease;
+        }
+
+        .copyright:hover {
+            color: #888;
         }
 
         .footer-bottom-links {
@@ -1525,18 +2246,170 @@ if (!$recent_reservations_result) {
             text-decoration: none;
             font-size: 0.9rem;
             transition: color 0.3s ease;
+            position: relative;
+        }
+
+        .footer-bottom-links a::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 1px;
+            background: red;
+            transition: width 0.3s ease;
+        }
+
+        .footer-bottom-links a:hover::after {
+            width: 100%;
         }
 
         .footer-bottom-links a:hover {
             color: red;
         }
 
-        /* Responsive Footer */
-        @media (max-width: 768px) {
-            .footer {
-                padding: 40px 20px 20px;
+        /* Responsive */
+        @media (max-width: 992px) {
+            .nav {
+                padding: 15px 30px;
             }
+            
+            .nav-logo {
+                width: 55px;
+                height: 55px;
+            }
+            
+            .nav-title {
+                font-size: 24px;
+            }
+            
+            .nav-menu {
+                gap: 20px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .nav {
+                padding: 15px 20px;
+            }
+            
+            .nav-logo {
+                width: 45px;
+                height: 45px;
+            }
+            
+            .nav-title {
+                font-size: 20px;
+                letter-spacing: 2px;
+            }
+            
+            .mobile-menu-btn,
+            .mobile-search-btn {
+                display: block;
+            }
+            
+            .nav-menu {
+                position: fixed;
+                top: 0;
+                right: -100%;
+                width: 300px;
+                height: 100vh;
+                background: rgba(0, 0, 0, 0.98);
+                backdrop-filter: blur(15px);
+                flex-direction: column;
+                padding: 80px 25px 30px;
+                transition: right 0.3s ease;
+                z-index: 1000;
+                border-left: 2px solid red;
+                overflow-y: auto;
+            }
+            
+            .nav-menu.active {
+                right: 0;
+            }
+            
+            .nav-menu.active li {
+                animation: slideInRight 0.3s ease forwards;
+                animation-delay: calc(0.05s * var(--i));
+            }
+            
+            .nav-menu.active li:nth-child(1) { --i: 1; }
+            .nav-menu.active li:nth-child(2) { --i: 2; }
+            .nav-menu.active li:nth-child(3) { --i: 3; }
+            .nav-menu.active li:nth-child(4) { --i: 4; }
+            .nav-menu.active li:nth-child(5) { --i: 5; }
+            .nav-menu.active li:nth-child(6) { --i: 6; }
 
+            @keyframes slideInRight {
+                from {
+                    opacity: 0;
+                    transform: translateX(50px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+            
+            .nav-menu li {
+                margin: 5px 0;
+            }
+            
+            .nav-menu li a {
+                padding: 15px 20px;
+                font-size: 1.1rem;
+            }
+            
+            .notification-bell {
+                margin-right: 0;
+            }
+            
+            .notification-dropdown {
+                position: fixed;
+                top: 80px;
+                left: 10px;
+                right: 10px;
+                width: auto;
+                margin-top: 0;
+            }
+            
+            .dropdown-menu {
+                position: static;
+                background: rgba(30, 30, 30, 0.95);
+                border: 1px solid #444;
+                margin: 5px 0 5px 20px;
+                display: none;
+                min-width: 100%;
+            }
+            
+            .dropdown-menu li a {
+                white-space: normal;
+            }
+            
+            .dropdown.active .dropdown-menu {
+                display: block;
+            }
+            
+            .close-menu-btn {
+                display: block;
+            }
+            
+            .mobile-search-container {
+                top: 80px;
+            }
+            
+            .recent-reservations-section {
+                margin-top: 100px;
+            }
+            
+            .recent-reservations-header {
+                font-size: 1.5rem;
+            }
+            
+            .cart-header {
+                font-size: 2rem;
+            }
+            
             .footer-grid {
                 gap: 30px;
             }
@@ -1558,8 +2431,63 @@ if (!$recent_reservations_result) {
                 justify-content: center;
             }
         }
-
+        
         @media (max-width: 480px) {
+            .nav {
+                padding: 12px 15px;
+            }
+            
+            .nav-logo {
+                width: 45px;
+                height: 45px;
+            }
+            
+            .nav-title {
+                font-size: 20px;
+                letter-spacing: 2px;
+            }
+            
+            .mobile-search-container {
+                top: 70px;
+            }
+            
+            .notification-dropdown {
+                top: 70px;
+            }
+            
+            .notification-item {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .notification-icon {
+                width: 30px;
+                height: 30px;
+                font-size: 1rem;
+            }
+            
+            .recent-reservations-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .cart-item {
+                flex-direction: column;
+                text-align: center;
+            }
+            
+            .item-price {
+                text-align: center;
+            }
+            
+            .item-remove {
+                justify-content: center;
+            }
+            
+            .cart-summary {
+                flex-direction: column;
+                text-align: center;
+            }
+            
             .footer-title::after {
                 left: 50%;
                 transform: translateX(-50%);
@@ -1582,666 +2510,10 @@ if (!$recent_reservations_result) {
                 justify-content: center;
             }
         }
-                /* ===== NAVIGATION ANIMATIONS ===== */
-        .nav {
-            transition: all 0.3s ease;
-        }
-
-        .nav.scrolled {
-            padding: 10px 60px;
-            background: rgba(0, 0, 0, 0.98);
-            box-shadow: 0 5px 40px rgba(255, 0, 0, 0.3);
-        }
-
-        .nav.scrolled .nav-logo {
-            width: 55px;
-            height: 55px;
-        }
-
-        .nav.scrolled .nav-title {
-            font-size: 24px;
-        }
-
-        .nav-menu li {
-            position: relative;
-            animation: fadeInNav 0.5s ease forwards;
-            opacity: 0;
-        }
-
-        .nav-menu li:nth-child(1) { animation-delay: 0.1s; }
-        .nav-menu li:nth-child(2) { animation-delay: 0.15s; }
-        .nav-menu li:nth-child(3) { animation-delay: 0.2s; }
-        .nav-menu li:nth-child(4) { animation-delay: 0.25s; }
-        .nav-menu li:nth-child(5) { animation-delay: 0.3s; }
-
-        @keyframes fadeInNav {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .nav-menu li a {
-            position: relative;
-            overflow: hidden;
-        }
-
-        .nav-menu li a::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            border-radius: 50%;
-            background: rgba(255, 0, 0, 0.2);
-            transform: translate(-50%, -50%);
-            transition: width 0.6s ease, height 0.6s ease;
-            z-index: -1;
-        }
-
-        .nav-menu li a:hover::before {
-            width: 200px;
-            height: 200px;
-        }
-
-        .nav-menu li a i {
-            transition: transform 0.3s ease;
-        }
-
-        .nav-menu li a:hover i {
-            transform: rotate(360deg);
-        }
-
-        .nav-menu li.active > a::after {
-            animation: slideIn 0.3s ease;
-        }
-
-        @keyframes slideIn {
-            from {
-                width: 0;
-                opacity: 0;
-            }
-            to {
-                width: calc(100% - 24px);
-                opacity: 1;
-            }
-        }
-
-        /* Dropdown Menu Animation */
-        .dropdown-menu {
-            animation: dropdownFade 0.3s ease;
-        }
-
-        @keyframes dropdownFade {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .dropdown-menu li a {
-            position: relative;
-            overflow: hidden;
-        }
-
-        .dropdown-menu li a::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 0;
-            height: 100%;
-            background: rgba(255, 0, 0, 0.1);
-            transition: width 0.3s ease;
-            z-index: -1;
-        }
-
-        .dropdown-menu li a:hover::before {
-            width: 100%;
-        }
-
-        .dropdown-menu li a i {
-            transition: transform 0.3s ease;
-        }
-
-        .dropdown-menu li a:hover i {
-            transform: scale(1.2);
-        }
-
-        /* Cart Count Animation */
-        .cart-count {
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                transform: scale(1);
-            }
-            50% {
-                transform: scale(1.1);
-            }
-        }
-
-        /* Mobile Menu Animation */
-        .mobile-menu-btn {
-            transition: transform 0.3s ease;
-        }
-        
-        .mobile-menu-btn:hover {
-            transform: scale(1.1);
-            color: red;
-        }
-        
-        .mobile-menu-btn:active {
-            transform: scale(0.95);
-        }
-        
-        .close-menu-btn {
-            transition: all 0.3s ease;
-        }
-        
-        .close-menu-btn:hover {
-            color: red;
-            transform: rotate(90deg);
-        }
-        
-        .mobile-search-btn {
-            transition: all 0.3s ease;
-        }
-        
-        .mobile-search-btn:hover {
-            color: red;
-            transform: scale(1.1);
-        }
-        
-        .mobile-search-container {
-            animation: slideDown 0.3s ease;
-        }
-
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .mobile-search-input {
-            transition: all 0.3s ease;
-        }
-        
-        .mobile-search-input:focus {
-            transform: scale(1.02);
-        }
-
-        /* Hero Section Animations */
-        .hero-section {
-            animation: heroFadeIn 1.5s ease;
-        }
-
-        @keyframes heroFadeIn {
-            from {
-                opacity: 0;
-                transform: scale(1.1);
-            }
-            to {
-                opacity: 1;
-                transform: scale(1);
-            }
-        }
-
-        .hero-content {
-            animation: slideUp 1s ease;
-        }
-
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(50px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .hero-title {
-            animation: titleGlow 3s ease-in-out infinite;
-        }
-
-        @keyframes titleGlow {
-            0%, 100% {
-                text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-            }
-            50% {
-                text-shadow: 0 0 20px rgba(255,0,0,0.5);
-            }
-        }
-
-        .hero-subtitle {
-            animation: fadeIn 2s ease;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-            }
-            to {
-                opacity: 1;
-            }
-        }
-
-        .hero-button {
-            position: relative;
-            overflow: hidden;
-        }
-
-        .hero-button::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.3);
-            transform: translate(-50%, -50%);
-            transition: width 0.6s ease, height 0.6s ease;
-        }
-
-        .hero-button:hover::before {
-            width: 300px;
-            height: 300px;
-        }
-
-        /* Products Section Animations */
-        .products-section {
-            animation: fadeInUp 1s ease;
-        }
-
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .product-card {
-            animation: cardFadeIn 0.5s ease forwards;
-            animation-delay: calc(0.1s * var(--i));
-            opacity: 0;
-        }
-
-        .product-card:nth-child(1) { --i: 1; }
-        .product-card:nth-child(2) { --i: 2; }
-        .product-card:nth-child(3) { --i: 3; }
-        .product-card:nth-child(4) { --i: 4; }
-        .product-card:nth-child(5) { --i: 5; }
-        .product-card:nth-child(6) { --i: 6; }
-
-        @keyframes cardFadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .product-badge {
-            animation: badgePulse 2s infinite;
-        }
-
-        @keyframes badgePulse {
-            0%, 100% {
-                transform: scale(1);
-            }
-            50% {
-                transform: scale(1.05);
-            }
-        }
-
-        .product-card img {
-            transition: transform 0.3s ease;
-        }
-
-        .product-card:hover img {
-            transform: scale(1.08);
-        }
-
-        .product-name {
-            transition: color 0.3s ease;
-        }
-
-        .product-card:hover .product-name {
-            color: #ff4444;
-        }
-
-        .product-brand {
-            transition: color 0.3s ease;
-        }
-
-        .product-card:hover .product-brand {
-            color: #aaa;
-        }
-
-        .product-price {
-            transition: transform 0.3s ease;
-        }
-
-        .product-card:hover .product-price {
-            transform: scale(1.05);
-        }
-
-        .stock-tag {
-            transition: all 0.3s ease;
-        }
-
-        .product-card:hover .stock-tag {
-            background: rgba(0, 255, 0, 0.2);
-            transform: scale(1.05);
-        }
-
-        .out-of-stock-tag {
-            transition: all 0.3s ease;
-        }
-
-        .product-card:hover .out-of-stock-tag {
-            background: rgba(255, 0, 0, 0.2);
-        }
-
-        /* Button Animations */
-        .cart-btn,
-        .reserve-btn,
-        .filter-btn,
-        .add-to-cart-submit,
-        .submit-res-btn {
-            position: relative;
-            overflow: hidden;
-        }
-
-        .cart-btn::before,
-        .reserve-btn::before,
-        .filter-btn::before,
-        .add-to-cart-submit::before,
-        .submit-res-btn::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.2);
-            transform: translate(-50%, -50%);
-            transition: width 0.6s ease, height 0.6s ease;
-        }
-
-        .cart-btn:hover::before,
-        .reserve-btn:hover::before,
-        .filter-btn:hover::before,
-        .add-to-cart-submit:hover::before,
-        .submit-res-btn:hover::before {
-            width: 300px;
-            height: 300px;
-        }
-
-        /* Modal Animations */
-        .quick-cart-modal,
-        .modal {
-            animation: modalFadeIn 0.3s ease;
-        }
-
-        @keyframes modalFadeIn {
-            from {
-                opacity: 0;
-            }
-            to {
-                opacity: 1;
-            }
-        }
-
-        .quick-cart-content,
-        .modal-content {
-            animation: modalSlideIn 0.3s ease;
-        }
-
-        @keyframes modalSlideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-50px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .close-modal {
-            transition: all 0.3s ease;
-        }
-
-        .close-modal:hover {
-            transform: rotate(90deg);
-        }
-
-        /* Form Input Animations */
-        input, select {
-            transition: all 0.3s ease;
-        }
-
-        input:focus, select:focus {
-            transform: scale(1.02);
-        }
-
-        /* Loading Spinner Animation */
-        .spinner {
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* Back to Top Button Animation */
-        .back-to-top {
-            animation: bounce 2s infinite;
-            transition: all 0.3s ease;
-        }
-
-        @keyframes bounce {
-            0%, 100% {
-                transform: translateY(0);
-            }
-            50% {
-                transform: translateY(-5px);
-            }
-        }
-
-        .back-to-top:hover {
-            transform: translateY(-5px) scale(1.1);
-        }
-
-        /* Footer Animations */
-        .footer-col {
-            animation: slideUp 0.5s ease forwards;
-            animation-delay: calc(0.1s * var(--i));
-            opacity: 0;
-        }
-
-        .footer-col:nth-child(1) { --i: 1; }
-        .footer-col:nth-child(2) { --i: 2; }
-        .footer-col:nth-child(3) { --i: 3; }
-        .footer-col:nth-child(4) { --i: 4; }
-
-        .footer-logo {
-            transition: transform 0.3s ease;
-        }
-
-        .footer-logo:hover {
-            transform: scale(1.05);
-        }
-
-        .footer-logo img {
-            transition: all 0.3s ease;
-        }
-
-        .footer-logo:hover img {
-            filter: drop-shadow(0 0 20px rgba(255, 0, 0, 0.8));
-        }
-
-        .footer-description {
-            transition: color 0.3s ease;
-        }
-
-        .footer-description:hover {
-            color: #aaa;
-        }
-
-        .social-link {
-            position: relative;
-            overflow: hidden;
-            transition: all 0.3s ease;
-        }
-
-        .social-link::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.2);
-            transform: translate(-50%, -50%);
-            transition: width 0.6s ease, height 0.6s ease;
-        }
-
-        .social-link:hover::before {
-            width: 80px;
-            height: 80px;
-        }
-
-        .social-link:hover {
-            transform: translateY(-5px) scale(1.1);
-        }
-
-        .footer-title::after {
-            transition: width 0.3s ease;
-        }
-
-        .footer-col:hover .footer-title::after {
-            width: 80px;
-        }
-
-        .footer-links li a {
-            transition: all 0.3s ease;
-        }
-
-        .footer-links li a i {
-            transition: transform 0.3s ease;
-        }
-
-        .footer-links li a:hover i {
-            transform: rotate(360deg);
-        }
-
-        .footer-contact li {
-            transition: all 0.3s ease;
-        }
-
-        .footer-contact li:hover {
-            transform: translateX(5px);
-        }
-
-        .footer-contact li i {
-            transition: transform 0.3s ease;
-        }
-
-        .footer-contact li:hover i {
-            transform: scale(1.2);
-        }
-
-        .copyright {
-            transition: color 0.3s ease;
-        }
-
-        .copyright:hover {
-            color: #888;
-        }
-
-        .footer-bottom-links a {
-            position: relative;
-            transition: color 0.3s ease;
-        }
-
-        .footer-bottom-links a::after {
-            content: '';
-            position: absolute;
-            bottom: -2px;
-            left: 0;
-            width: 0;
-            height: 1px;
-            background: red;
-            transition: width 0.3s ease;
-        }
-
-        .footer-bottom-links a:hover::after {
-            width: 100%;
-        }
-
-        /* Mobile Menu Item Animations */
-        @media (max-width: 768px) {
-            .nav-menu.active li {
-                animation: slideInRight 0.3s ease forwards;
-                animation-delay: calc(0.05s * var(--i));
-            }
-            
-            .nav-menu.active li:nth-child(1) { --i: 1; }
-            .nav-menu.active li:nth-child(2) { --i: 2; }
-            .nav-menu.active li:nth-child(3) { --i: 3; }
-            .nav-menu.active li:nth-child(4) { --i: 4; }
-            .nav-menu.active li:nth-child(5) { --i: 5; }
-
-            @keyframes slideInRight {
-                from {
-                    opacity: 0;
-                    transform: translateX(50px);
-                }
-                to {
-                    opacity: 1;
-                    transform: translateX(0);
-                }
-            }
-        }
-
-        /* Empty Cart Animation */
-        .empty-cart i {
-            animation: bounce 2s infinite;
-        }
     </style>
 </head>
 <body>
-    <!-- Updated Navigation with styles exactly like index -->
+    <!-- Navigation with Notification Bell at Bottom of Right Side -->
     <nav class="nav">
         <div class="nav-left">
             <img src="images/589828036_1222267966428855_4924886836244892648_n-removebg-preview.png" class="nav-logo" alt="Ridershub Logo">
@@ -2249,7 +2521,14 @@ if (!$recent_reservations_result) {
         </div>
         
         <!-- Mobile Menu Button -->
-        <div style="display: flex; gap: 10px;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <!-- Low Stock Warning for User's Pending Reservations -->
+            <?php if($low_stock_count > 0): ?>
+            <span class="low-stock-warning" title="Some items in your pending reservations are running low">
+                <i class="fas fa-exclamation-triangle"></i> <?= $low_stock_count ?> Low Stock
+            </span>
+            <?php endif; ?>
+            
             <button class="mobile-search-btn" id="mobileSearchBtn">
                 <i class="fas fa-search"></i>
             </button>
@@ -2298,6 +2577,75 @@ if (!$recent_reservations_result) {
             </li>
             
             <li class="active"><a href="cart.php"><i class="fas fa-shopping-cart"></i> CART <span class="cart-count" id="navCartCount"><?= $cart_count ?></span></a></li>
+            
+            <!-- Notification Bell - Placed right before Logout -->
+            <li style="position: relative;">
+                <div class="notification-container">
+                    <div class="notification-bell" id="notificationBell">
+                        <i class="fas fa-bell"></i>
+                        <?php if($unread_count > 0): ?>
+                            <span class="notification-badge" id="notificationBadge"><?= $unread_count ?></span>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <!-- Notification Dropdown -->
+                    <div class="notification-dropdown" id="notificationDropdown">
+                        <div class="notification-header">
+                            <h3><i class="fas fa-bell"></i> NOTIFICATIONS</h3>
+                            <?php if($unread_count > 0): ?>
+                                <a href="?mark_all_read=1" class="mark-all-read">
+                                    <i class="fas fa-check-double"></i> Mark all as read
+                                </a>
+                            <?php endif; ?>
+                        </div>
+                        
+                        <div class="notification-list">
+                            <?php if($notifications_result && mysqli_num_rows($notifications_result) > 0): ?>
+                                <?php while($notif = mysqli_fetch_assoc($notifications_result)): ?>
+                                    <a href="?mark_read=<?= $notif['id'] ?>" style="text-decoration: none;">
+                                        <div class="notification-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>">
+                                            <div class="notification-icon">
+                                                <?php 
+                                                if($notif['type'] == 'confirmed'): 
+                                                    echo '<i class="fas fa-check-circle"></i>';
+                                                elseif($notif['type'] == 'cancel' || $notif['type'] == 'cancelled'): 
+                                                    echo '<i class="fas fa-times-circle"></i>';
+                                                elseif($notif['type'] == 'completed'): 
+                                                    echo '<i class="fas fa-flag-checkered"></i>';
+                                                elseif($notif['type'] == 'pending'): 
+                                                    echo '<i class="fas fa-clock"></i>';
+                                                else: 
+                                                    echo '<i class="fas fa-bell"></i>';
+                                                endif; 
+                                                ?>
+                                            </div>
+                                            <div class="notification-content">
+                                                <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
+                                                <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                                <div class="notification-time">
+                                                    <i class="far fa-clock"></i> <?= date('M d, Y h:i A', strtotime($notif['created_at'])) ?>
+                                                    <?php if($notif['reservation_code']): ?>
+                                                        <span class="notification-status">
+                                                            <i class="fas fa-ticket-alt"></i> <?= $notif['reservation_code'] ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </a>
+                                <?php endwhile; ?>
+                            <?php else: ?>
+                                <div class="notification-empty">
+                                    <i class="fas fa-bell-slash"></i>
+                                    <h3>No Notifications</h3>
+                                    <p>You're all caught up!</p>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </li>
+            
             <li><a href="logout.php" onclick="return confirm('Are you sure you want to logout?')"><i class="fas fa-sign-out-alt"></i> LOGOUT</a></li>
         </ul>
     </nav>
@@ -2311,6 +2659,11 @@ if (!$recent_reservations_result) {
     <div class="recent-reservations-section">
         <h2 class="recent-reservations-header">
             <i class="fas fa-clock-rotate-left"></i> YOUR RECENT RESERVATIONS
+            <?php if($low_stock_count > 0): ?>
+            <span class="low-stock-warning">
+                <i class="fas fa-exclamation-triangle"></i> <?= $low_stock_count ?> items low stock
+            </span>
+            <?php endif; ?>
         </h2>
         
         <!-- Display Messages -->
@@ -2335,6 +2688,10 @@ if (!$recent_reservations_result) {
                     $color = $recent['selected_color'] ?? 'Standard';
                     $size = $recent['selected_size'] ?? 'One Size';
                     $total_amount = $recent['total_amount'] ?? ($recent['price'] * $recent['quantity']);
+                    $status = $recent['status'] ?? 'pending';
+                    $current_stock = $recent['current_stock'] ?? 0;
+                    $current_reserved = $recent['current_reserved'] ?? 0;
+                    $available_stock = $current_stock - $current_reserved;
                     ?>
                     <div class="recent-reservation-card">
                         <div class="recent-reservation-content">
@@ -2360,11 +2717,16 @@ if (!$recent_reservations_result) {
                                     <span>Color:</span> <?= htmlspecialchars($color) ?><br>
                                     <span>Size:</span> <?= htmlspecialchars($size) ?><br>
                                     <span>Qty:</span> <?= $recent['quantity'] ?>
+                                    <?php if($status == 'PENDING'): ?>
+                                        <span class="stock-info-small">
+                                            <i class="fas fa-box"></i> Available: <?= max(0, $available_stock) ?>
+                                        </span>
+                                    <?php endif; ?>
                                 </div>
                                 
                                 <div style="margin-top: 8px;">
-                                    <span class="status-badge status-<?= strtolower($recent['status'] ?? 'pending') ?>">
-                                        <?= strtoupper($recent['status'] ?? 'PENDING') ?>
+                                    <span class="status-badge status-<?= strtolower($status) ?>">
+                                        <?= strtoupper($status) ?>
                                     </span>
                                     <span class="recent-reservation-code">
                                         <i class="fas fa-ticket-alt"></i> <?= $recent['ticket_number'] ?? $recent['reservation_code'] ?? 'N/A' ?>
@@ -2378,6 +2740,7 @@ if (!$recent_reservations_result) {
                                 ₱<?= number_format($total_amount, 2) ?>
                             </span>
                             <div class="reservation-actions">
+                                <?php if($status != 'CANCELLED' && $status != 'COMPLETED'): ?>
                                 <button class="reserve-again-btn" onclick='openReserveAgainModal(<?= json_encode([
                                     'product_id' => $recent['product_id'],
                                     'name' => $recent['product_name'],
@@ -2388,9 +2751,12 @@ if (!$recent_reservations_result) {
                                 ]) ?>)'>
                                     <i class="fas fa-rotate-right"></i> RESERVE AGAIN
                                 </button>
+                                <?php endif; ?>
+                                <?php if($status == 'PENDING' || $status == 'CANCELLED'): ?>
                                 <button class="delete-reservation-btn" onclick="deleteReservation(<?= $recent['id'] ?>, '<?= addslashes($recent['product_name'] ?? 'this item') ?>')">
                                     <i class="fas fa-trash"></i> DELETE
                                 </button>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
@@ -2406,7 +2772,12 @@ if (!$recent_reservations_result) {
     </div>
     
     <div class="cart-container">
-        <h1 class="cart-header"><i class="fas fa-shopping-cart"></i> YOUR CART</h1>
+        <h1 class="cart-header">
+            <i class="fas fa-shopping-cart"></i> YOUR CART
+            <?php if($cart_count > 0): ?>
+            <span class="cart-count" style="position: static; animation: none;"><?= $cart_count ?> items</span>
+            <?php endif; ?>
+        </h1>
         
         <?php if(empty($cart_items)): ?>
             <div class="cart-items">
@@ -2422,13 +2793,29 @@ if (!$recent_reservations_result) {
         <?php else: ?>
             <div class="cart-items">
                 <?php foreach($cart_items as $key => $item): ?>
+                    <?php 
+                    $available_stock = $item['available_stock'] ?? 0;
+                    $stock_class = '';
+                    $stock_message = '';
+                    if($available_stock <= 0) {
+                        $stock_class = 'out-of-stock';
+                        $stock_message = 'Out of Stock';
+                    } elseif($available_stock <= 5) {
+                        $stock_class = 'low-stock';
+                        $stock_message = 'Low Stock';
+                    }
+                    ?>
                     <div class="cart-item" data-cart-key="<?= $key ?>" data-product-id="<?= $item['product_id'] ?>">
                         <img src="uploads/<?= $item['image'] ?>" alt="<?= htmlspecialchars($item['name']) ?>">
                         <div class="item-details">
                             <div class="item-name"><?= htmlspecialchars($item['name']) ?></div>
                             <div class="item-specs">
                                 <span style="color: #fff;">Color:</span> <?= htmlspecialchars($item['color']) ?><br>
-                                <span style="color: #fff;">Size:</span> <?= htmlspecialchars($item['size']) ?>
+                                <span style="color: #fff;">Size:</span> <?= htmlspecialchars($item['size']) ?><br>
+                                <span class="stock-info-small <?= $stock_class ?>">
+                                    <i class="fas fa-<?= $available_stock > 0 ? 'check-circle' : 'exclamation-circle' ?>"></i>
+                                    Available: <?= $available_stock ?> <?= $stock_message ? "($stock_message)" : '' ?>
+                                </span>
                             </div>
                         </div>
                         <div class="item-price">
@@ -2436,16 +2823,19 @@ if (!$recent_reservations_result) {
                         </div>
                         <div class="item-quantity">
                             <div class="quantity-control">
-                                <button class="quantity-btn" onclick="updateQuantity('<?= $key ?>', -1)">-</button>
-                                <input type="number" class="quantity-input" value="<?= $item['quantity'] ?>" min="1" readonly>
-                                <button class="quantity-btn" onclick="updateQuantity('<?= $key ?>', 1)">+</button>
+                                <button class="quantity-btn" onclick="updateQuantity('<?= $key ?>', -1)" 
+                                    <?= $item['quantity'] <= 1 ? 'disabled' : '' ?>>-</button>
+                                <input type="number" class="quantity-input" value="<?= $item['quantity'] ?>" min="1" max="<?= $available_stock ?>" readonly>
+                                <button class="quantity-btn" onclick="updateQuantity('<?= $key ?>', 1)" 
+                                    <?= $item['quantity'] >= $available_stock ? 'disabled' : '' ?>>+</button>
                             </div>
                         </div>
                         <div class="item-remove">
                             <button class="remove-btn" onclick="removeItem('<?= $key ?>')" title="Remove from cart">
                                 <i class="fas fa-trash"></i>
                             </button>
-                            <button class="reserve-item-btn" onclick="reserveSingleItemFromCart('<?= $key ?>')">
+                            <button class="reserve-item-btn" onclick="reserveSingleItemFromCart('<?= $key ?>')"
+                                <?= $available_stock <= 0 ? 'disabled' : '' ?>>
                                 <i class="fas fa-check-circle"></i> RESERVE
                             </button>
                         </div>
@@ -2456,7 +2846,8 @@ if (!$recent_reservations_result) {
                     <div class="cart-total">
                         TOTAL: <span class="total-amount">₱<?= number_format($cart_total, 2) ?></span>
                     </div>
-                    <button class="reserve-btn" onclick="openReserveAllModal()">
+                    <button class="reserve-btn" onclick="openReserveAllModal()" 
+                        <?= $cart_count == 0 ? 'disabled' : '' ?>>
                         RESERVE ALL ITEMS <i class="fas fa-arrow-right"></i>
                     </button>
                 </div>
@@ -2620,6 +3011,35 @@ if (!$recent_reservations_result) {
         const cartItemsData = <?= json_encode($js_cart_items) ?>;
         let cartItems = [...cartItemsData];
         
+        // =========== NOTIFICATION BELL FUNCTIONALITY ===========
+        document.addEventListener("DOMContentLoaded", function() {
+            const notificationBell = document.getElementById("notificationBell");
+            const notificationDropdown = document.getElementById("notificationDropdown");
+            
+            // Toggle notification dropdown
+            notificationBell.addEventListener('click', function(e) {
+                e.stopPropagation();
+                notificationDropdown.style.display = notificationDropdown.style.display === 'block' ? 'none' : 'block';
+            });
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!notificationBell.contains(e.target) && !notificationDropdown.contains(e.target)) {
+                    notificationDropdown.style.display = 'none';
+                }
+            });
+            
+            // Prevent dropdown from closing when clicking inside
+            notificationDropdown.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+            
+            // Check for new notifications every 30 seconds
+            setInterval(function() {
+                location.reload();
+            }, 30000);
+        });
+        
         // =========== MOBILE MENU FUNCTIONALITY ===========
         document.addEventListener("DOMContentLoaded", function() {
             const mobileMenuBtn = document.getElementById("mobileMenuBtn");
@@ -2628,6 +3048,16 @@ if (!$recent_reservations_result) {
             const mobileSearchBtn = document.getElementById("mobileSearchBtn");
             const mobileSearchContainer = document.getElementById("mobileSearchContainer");
             const mobileSearchInput = document.getElementById("mobileSearchInput");
+            const nav = document.querySelector('.nav');
+            
+            // Navbar scroll effect
+            window.addEventListener('scroll', function() {
+                if (window.scrollY > 100) {
+                    nav.classList.add('scrolled');
+                } else {
+                    nav.classList.remove('scrolled');
+                }
+            });
             
             // Mobile Menu Toggle
             if (mobileMenuBtn) {
@@ -2704,13 +3134,23 @@ if (!$recent_reservations_result) {
         
         // =========== UPDATE QUANTITY ===========
         function updateQuantity(cartKey, change) {
+            const cartItem = document.querySelector(`.cart-item[data-cart-key="${cartKey}"]`);
+            const quantityInput = cartItem.querySelector('.quantity-input');
+            const currentQty = parseInt(quantityInput.value);
+            const maxQty = parseInt(quantityInput.max);
+            const newQty = currentQty + change;
+            
+            if (newQty < 1 || newQty > maxQty) return;
+            
             fetch('cart_handler.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: 'action=update_quantity&cart_key=' + encodeURIComponent(cartKey) + '&change=' + change
             })
             .then(response => response.json())
-            .then(data => { if(data.success) location.reload(); })
+            .then(data => { 
+                if(data.success) location.reload(); 
+            })
             .catch(error => console.error('Error:', error));
         }
         
@@ -2775,7 +3215,7 @@ if (!$recent_reservations_result) {
             const tomorrow = new Date(today);
             tomorrow.setDate(tomorrow.getDate() + 1);
             document.getElementById("reserveAgainPickupDate").value = tomorrow.toISOString().split('T')[0];
-            document.getElementById("reserveAgainPickupDate").min = today.toISOString().split('T')[0];
+            document.getElementById("reserveAgainPickupDate").min = tomorrow.toISOString().split('T')[0];
             
             // Fetch product details for stock and options
             fetch('cart_handler.php', {
@@ -2786,7 +3226,13 @@ if (!$recent_reservations_result) {
             .then(response => response.json())
             .then(data => {
                 if(data.success) {
-                    document.getElementById("reserveAgainStockDisplay").innerText = "Available Stock: " + (data.stock || 0);
+                    let stockCount = data.stock || 0;
+                    let reservedStock = data.reserved_stock || 0;
+                    
+                    document.getElementById("reserveAgainStockDisplay").innerText = "Available Stock: " + stockCount;
+                    if(reservedStock > 0) {
+                        document.getElementById("reserveAgainStockDisplay").innerHTML += `<br><small style="color: #ffaa00;">(${reservedStock} already reserved)</small>`;
+                    }
                     
                     // Populate Colors
                     const colorSelect = document.getElementById("reserveAgainColor");
@@ -2824,8 +3270,10 @@ if (!$recent_reservations_result) {
                     
                     // Set quantity
                     const qtyInput = document.getElementById("reserveAgainQuantity");
-                    qtyInput.max = data.stock || 999;
+                    qtyInput.max = stockCount || 999;
                     qtyInput.value = Math.min(itemData.quantity, qtyInput.max);
+                } else {
+                    document.getElementById("reserveAgainStockDisplay").innerText = "Stock information unavailable";
                 }
             })
             .catch(error => {
@@ -2916,31 +3364,52 @@ if (!$recent_reservations_result) {
             .then(data => {
                 Swal.close();
                 
-                let stockCount = 999;
-                let colors = currentColor;
-                let sizes = currentSize;
-                
                 if(data.success) {
-                    stockCount = data.stock || 999;
-                    colors = data.colors || currentColor;
-                    sizes = data.sizes || currentSize;
+                    let stockCount = data.stock || 0;
+                    let totalStock = data.total_stock || 0;
+                    let reservedStock = data.reserved_stock || 0;
+                    
+                    // Show stock info with reservation details
+                    let stockInfo = `Available: ${stockCount}`;
+                    if(reservedStock > 0) {
+                        stockInfo += ` (${reservedStock} already reserved)`;
+                    }
+                    
+                    openReserveModal(cartKey, productId, productName, currentColor, currentSize, 
+                                   currentQuantity, stockCount, data.colors, data.sizes, stockInfo);
+                } else {
+                    // Fallback
+                    openReserveModal(cartKey, productId, productName, currentColor, currentSize, 
+                                   currentQuantity, 999, currentColor, currentSize, "Stock info unavailable");
                 }
-                
-                openReserveModal(cartKey, productId, productName, currentColor, currentSize, currentQuantity, stockCount, colors, sizes);
             })
             .catch(error => {
                 Swal.close();
-                openReserveModal(cartKey, productId, productName, currentColor, currentSize, currentQuantity, 999, currentColor, currentSize);
+                openReserveModal(cartKey, productId, productName, currentColor, currentSize, 
+                               currentQuantity, 999, currentColor, currentSize, "Stock info unavailable");
             });
         }
 
-        function openReserveModal(cartKey, productId, productName, currentColor, currentSize, currentQuantity, stockCount, colors, sizes) {
+        function openReserveModal(cartKey, productId, productName, currentColor, currentSize, 
+                                  currentQuantity, stockCount, colors, sizes, stockInfo) {
             const modal = document.getElementById("reserveModal");
             
             document.getElementById("modalProductName").innerText = "Item: " + productName;
             document.getElementById("modalProductId").value = productId;
             document.getElementById("modalCartKey").value = cartKey;
-            document.getElementById("modalStockDisplay").innerText = "Available Stock: " + stockCount;
+            
+            // Show stock info with reservation details
+            const stockDisplay = document.getElementById("modalStockDisplay");
+            stockDisplay.innerText = "Available Stock: " + stockCount;
+            if(stockInfo && stockInfo.includes('reserved')) {
+                stockDisplay.innerHTML += `<br><small style="color: #ffaa00;">${stockInfo}</small>`;
+            }
+            
+            if(stockCount <= 0) {
+                stockDisplay.classList.add('out-of-stock');
+            } else if(stockCount <= 5) {
+                stockDisplay.classList.add('low-stock');
+            }
             
             // Populate Colors
             const modalColor = document.getElementById("modalColor");
@@ -2990,7 +3459,7 @@ if (!$recent_reservations_result) {
             const tomorrow = new Date(today);
             tomorrow.setDate(tomorrow.getDate() + 1);
             document.getElementById("pickupDate").value = tomorrow.toISOString().split('T')[0];
-            document.getElementById("pickupDate").min = today.toISOString().split('T')[0];
+            document.getElementById("pickupDate").min = tomorrow.toISOString().split('T')[0];
             
             modal.style.display = "block";
             document.body.style.overflow = 'hidden';
@@ -3003,9 +3472,14 @@ if (!$recent_reservations_result) {
                 const itemsList = document.getElementById("reserveAllItemsList");
                 itemsList.innerHTML = '';
                 
+                let hasUnavailable = false;
+                
                 cartItems.forEach(item => {
+                    const isAvailable = item.available_stock > 0;
+                    if(!isAvailable) hasUnavailable = true;
+                    
                     const itemHtml = `
-                        <div class="cart-item-preview">
+                        <div class="cart-item-preview" style="${!isAvailable ? 'opacity: 0.5;' : ''}">
                             <img src="uploads/${item.image}" alt="${item.name}">
                             <div class="cart-item-preview-details">
                                 <div class="cart-item-preview-name">${item.name}</div>
@@ -3013,6 +3487,8 @@ if (!$recent_reservations_result) {
                                     Color: ${item.color} | Size: ${item.size}
                                 </div>
                                 <div class="cart-item-preview-price">₱${item.price.toLocaleString()}</div>
+                                ${!isAvailable ? '<div class="cart-item-preview-stock"><i class="fas fa-exclamation-circle"></i> Out of Stock</div>' : ''}
+                                ${item.available_stock <= 5 && isAvailable ? '<div class="cart-item-preview-stock"><i class="fas fa-exclamation-triangle"></i> Low Stock</div>' : ''}
                             </div>
                             <div class="cart-item-preview-quantity">x${item.quantity}</div>
                         </div>
@@ -3027,10 +3503,21 @@ if (!$recent_reservations_result) {
                 const tomorrow = new Date(today);
                 tomorrow.setDate(tomorrow.getDate() + 1);
                 document.getElementById("reserveAllPickupDate").value = tomorrow.toISOString().split('T')[0];
-                document.getElementById("reserveAllPickupDate").min = today.toISOString().split('T')[0];
+                document.getElementById("reserveAllPickupDate").min = tomorrow.toISOString().split('T')[0];
                 
                 modal.style.display = "block";
                 document.body.style.overflow = 'hidden';
+                
+                if(hasUnavailable) {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'Some items unavailable',
+                        text: 'Some items in your cart are out of stock. They will be skipped.',
+                        background: '#111',
+                        color: '#fff',
+                        confirmButtonColor: '#ff0000'
+                    });
+                }
             <?php else: ?>
                 Swal.fire({
                     title: 'Cart is Empty',
@@ -3164,12 +3651,22 @@ if (!$recent_reservations_result) {
             // Reserve again modal
             const reserveAgainForm = document.getElementById("reserveAgainForm");
             
-            const today = new Date().toISOString().split('T')[0];
+            const today = new Date();
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            const tomorrowStr = tomorrow.toISOString().split('T')[0];
+            
             const pickupDate = document.getElementById('pickupDate');
             const reserveAgainPickupDate = document.getElementById('reserveAgainPickupDate');
             
-            if(pickupDate) pickupDate.min = today;
-            if(reserveAgainPickupDate) reserveAgainPickupDate.min = today;
+            if(pickupDate) {
+                pickupDate.min = tomorrowStr;
+                pickupDate.value = tomorrowStr;
+            }
+            if(reserveAgainPickupDate) {
+                reserveAgainPickupDate.min = tomorrowStr;
+                reserveAgainPickupDate.value = tomorrowStr;
+            }
             
             closeModal.forEach(btn => {
                 btn.onclick = function() {
@@ -3362,17 +3859,9 @@ if (!$recent_reservations_result) {
                 });
             });
         });
-        // Navbar scroll effect
-const nav = document.querySelector('.nav');
-window.addEventListener('scroll', () => {
-    if (window.scrollY > 100) {
-        nav.classList.add('scrolled');
-    } else {
-        nav.classList.remove('scrolled');
-    }
-});
     </script>
-        <!-- ===== FOOTER SECTION ===== -->
+    
+    <!-- Footer Section -->
     <footer class="footer">
         <div class="footer-content">
             <div class="footer-grid">
@@ -3385,13 +3874,7 @@ window.addEventListener('scroll', () => {
                     <p class="footer-description">
                         Your premier destination for premium motorcycle helmets and gears. Ride safe, ride stylish.
                     </p>
-                    <div class="social-links">
-                        <a href="#" class="social-link"><i class="fab fa-facebook-f"></i></a>
-                        <a href="#" class="social-link"><i class="fab fa-instagram"></i></a>
-                        <a href="#" class="social-link"><i class="fab fa-twitter"></i></a>
-                        <a href="#" class="social-link"><i class="fab fa-youtube"></i></a>
-                        <a href="#" class="social-link"><i class="fab fa-tiktok"></i></a>
-                    </div>
+                   
                 </div>
 
                 <!-- Quick Links -->
@@ -3399,7 +3882,7 @@ window.addEventListener('scroll', () => {
                     <h3 class="footer-title">QUICK LINKS</h3>
                     <ul class="footer-links">
                         <li><a href="index.php"><i class="fas fa-chevron-right"></i> Home</a></li>
-                        <li><a href="#products"><i class="fas fa-chevron-right"></i> Products</a></li>
+                        <li><a href="index.php#products"><i class="fas fa-chevron-right"></i> Products</a></li>
                         <li><a href="cart.php"><i class="fas fa-chevron-right"></i> Cart</a></li>
                         <li><a href="#about"><i class="fas fa-chevron-right"></i> About Us</a></li>
                         <li><a href="#contact"><i class="fas fa-chevron-right"></i> Contact</a></li>
@@ -3442,7 +3925,16 @@ window.addEventListener('scroll', () => {
                 </div>
             </div>
 
-            
+            <!-- Newsletter -->
+            <div class="newsletter">
+                <h3 class="newsletter-title">STAY UPDATED</h3>
+                <p class="newsletter-text">Subscribe to get notified about new arrivals and exclusive offers</p>
+                <form class="newsletter-form" onsubmit="event.preventDefault(); alert('Newsletter subscription feature coming soon!')">
+                    <input type="email" placeholder="Your email address" required>
+                    <button type="submit">SUBSCRIBE</button>
+                </form>
+            </div>
+
             <!-- Bottom Bar -->
             <div class="footer-bottom">
                 <div class="copyright">
