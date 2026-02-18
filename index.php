@@ -1,4 +1,8 @@
 <?php
+    
+    error_reporting(E_ALL);
+ini_set('display_errors', 1);
+    
 session_start();
 require_once "config.php";
 
@@ -2534,7 +2538,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                         <?= $badge_text ?>
                     </span>
                     
-                    <img src="uploads/<?= htmlspecialchars($p['image'] ?? '') ?>" alt="<?= htmlspecialchars($p['name'] ?? 'Product') ?>">
+                    <!-- ✅ FIXED: Changed from 'uploads/' to 'images/' -->
+                    <img src="images/<?= htmlspecialchars($p['image'] ?? '') ?>" alt="<?= htmlspecialchars($p['name'] ?? 'Product') ?>">
                     
                     <div class="product-info">
                         <h3 class="product-name"><?= htmlspecialchars($p['name'] ?? 'Unnamed Product') ?></h3>

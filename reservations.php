@@ -467,7 +467,8 @@ $stats = mysqli_fetch_assoc($stats_result);
                                         <td>
                                             <div class="d-flex align-items-center">
                                                 <?php if($row['image']): ?>
-                                                <img src="uploads/<?php echo $row['image']; ?>" 
+                                                <!-- ✅ FIXED: Changed from 'uploads/' to 'images/' -->
+                                                <img src="images/<?php echo $row['image']; ?>" 
                                                      alt="<?php echo $row['product_name']; ?>" 
                                                      style="width: 40px; height: 40px; object-fit: cover; border-radius: 4px; margin-right: 8px;">
                                                 <?php endif; ?>
@@ -579,7 +580,8 @@ $stats = mysqli_fetch_assoc($stats_result);
                     <div class="row">
                         <div class="col-md-4 text-center">
                             <?php if($row['image']): ?>
-                            <img src="uploads/<?php echo $row['image']; ?>" 
+                            <!-- ✅ FIXED: Changed from 'uploads/' to 'images/' -->
+                            <img src="images/<?php echo $row['image']; ?>" 
                                  class="img-fluid rounded mb-3" 
                                  alt="<?php echo $row['product_name']; ?>"
                                  style="max-height: 150px; object-fit: contain;">

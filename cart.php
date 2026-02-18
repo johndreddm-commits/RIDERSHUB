@@ -2696,7 +2696,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     <div class="recent-reservation-card">
                         <div class="recent-reservation-content">
                             <?php if($recent['product_image']): ?>
-                                <img src="uploads/<?= $recent['product_image'] ?>" 
+                                <img src="images/<?= $recent['product_image'] ?>" 
                                      alt="<?= htmlspecialchars($recent['product_name']) ?>" 
                                      class="recent-reservation-image">
                             <?php else: ?>
@@ -2806,7 +2806,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     }
                     ?>
                     <div class="cart-item" data-cart-key="<?= $key ?>" data-product-id="<?= $item['product_id'] ?>">
-                        <img src="uploads/<?= $item['image'] ?>" alt="<?= htmlspecialchars($item['name']) ?>">
+                        <img src="images/<?= $item['image'] ?>" alt="<?= htmlspecialchars($item['name']) ?>">
                         <div class="item-details">
                             <div class="item-name"><?= htmlspecialchars($item['name']) ?></div>
                             <div class="item-specs">
@@ -3480,7 +3480,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     
                     const itemHtml = `
                         <div class="cart-item-preview" style="${!isAvailable ? 'opacity: 0.5;' : ''}">
-                            <img src="uploads/${item.image}" alt="${item.name}">
+                            <img src="images/${item.image}" alt="${item.name}">
                             <div class="cart-item-preview-details">
                                 <div class="cart-item-preview-name">${item.name}</div>
                                 <div class="cart-item-preview-specs">
@@ -3632,8 +3632,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 console.error('Error:', error);
                 Swal.fire({
                     icon: 'error',
-                    title: 'Error!',
-                    text: 'Network error. Please try again.',
+                    title: 'Network Error!',
+                    text: 'Please try again.',
                     background: '#111',
                     color: '#fff',
                     confirmButtonColor: '#ff0000'
@@ -3777,8 +3777,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     console.error('Error:', error);
                     Swal.fire({
                         icon: 'error',
-                        title: 'Error!',
-                        text: 'Something went wrong. Please try again.',
+                        title: 'Network Error!',
+                        text: 'Please try again.',
                         background: '#111',
                         color: '#fff',
                         confirmButtonColor: '#ff0000'
@@ -3850,8 +3850,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     console.error('Error:', error);
                     Swal.fire({
                         icon: 'error',
-                        title: 'Error!',
-                        text: 'Something went wrong. Please try again.',
+                        title: 'Network Error!',
+                        text: 'Please try again.',
                         background: '#111',
                         color: '#fff',
                         confirmButtonColor: '#ff0000'

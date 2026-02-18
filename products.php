@@ -66,7 +66,7 @@ if($action == 'add' && $_SERVER['REQUEST_METHOD'] == 'POST') {
     // Handle image upload
     $image_name = '';
     if(isset($_FILES['image']) && $_FILES['image']['error'] == 0) {
-        $target_dir = "uploads/";
+        $target_dir = "images/";
         if (!file_exists($target_dir)) {
             mkdir($target_dir, 0777, true);
         }
@@ -145,7 +145,7 @@ if($action == 'edit' && $_SERVER['REQUEST_METHOD'] == 'POST') {
         $image_update = '';
         $image_name = null;
         if(isset($_FILES['image']) && $_FILES['image']['error'] == 0) {
-            $target_dir = "uploads/";
+            $target_dir = "images/";
             if (!file_exists($target_dir)) {
                 mkdir($target_dir, 0777, true);
             }
@@ -597,7 +597,8 @@ $stats = mysqli_fetch_assoc($stats_result);
                             
                             <!-- Product Image -->
                             <?php if($product['image']): ?>
-                            <img src="uploads/<?php echo $product['image']; ?>" 
+                            <!-- ✅ FIXED: Changed from 'uploads/' to 'images/' -->
+                            <img src="images/<?php echo $product['image']; ?>" 
                                  class="card-img-top product-img p-3" 
                                  alt="<?php echo $product['name']; ?>">
                             <?php else: ?>

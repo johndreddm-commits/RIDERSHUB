@@ -442,7 +442,8 @@ foreach ($products as $product) {
                                 <!-- Product Image -->
                                 <div class="text-center mb-3">
                                     <?php if (!empty($product['image'])): ?>
-                                        <img src="uploads/<?php echo htmlspecialchars($product['image']); ?>" 
+                                        <!-- ✅ FIXED: Changed from 'uploads/' to 'images/' -->
+                                        <img src="images/<?php echo htmlspecialchars($product['image']); ?>" 
                                              alt="<?php echo htmlspecialchars($product['name']); ?>" 
                                              style="max-height: 120px; object-fit: contain;">
                                     <?php else: ?>
@@ -550,7 +551,8 @@ foreach ($products as $product) {
                                     <td>
                                         <div class="d-flex align-items-center">
                                             <?php if (!empty($log['image'])): ?>
-                                            <img src="uploads/<?php echo htmlspecialchars($log['image']); ?>" 
+                                            <!-- ✅ FIXED: Changed from 'uploads/' to 'images/' -->
+                                            <img src="images/<?php echo htmlspecialchars($log['image']); ?>" 
                                                  alt="" style="width: 30px; height: 30px; object-fit: cover; border-radius: 4px; margin-right: 8px;">
                                             <?php endif; ?>
                                             <?php echo htmlspecialchars($log['product_name'] ?? 'Unknown'); ?>
