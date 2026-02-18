@@ -15,7 +15,7 @@ if(isset($_GET['action'])) {
     // Get reservation details before any action
     $reservation_query = "SELECT r.*, p.name as product_name, p.image, p.stock, p.current_stock,
                                  p.reserved_stock, i.quantity as inventory_qty, i.reserved_quantity,
-                                 r.user_id
+                                 i.available_stock as inventory_available, r.user_id
                           FROM reservations r 
                           JOIN products p ON r.product_id = p.id 
                           LEFT JOIN inventory i ON r.product_id = i.product_id 
@@ -30,24 +30,19 @@ if(isset($_GET['action'])) {
         if($reservation['status'] != 'CONFIRMED') {
             $product_id = $reservation['product_id'];
             $user_id = $reservation['user_id'];
-            
-            // Get current stock
-            $product_query = "SELECT p.*, i.quantity as inventory_qty, i.reserved_quantity as inv_reserved
-                             FROM products p 
-                             LEFT JOIN inventory i ON p.id = i.product_id 
-                             WHERE p.id = ?";
-            $stmt = mysqli_prepare($conn, $product_query);
-            mysqli_stmt_bind_param($stmt, "i", $product_id);
-            mysqli_stmt_execute($stmt);
-            $product_result = mysqli_stmt_get_result($stmt);
-            $product = mysqli_fetch_assoc($product_result);
-            
             $reservation_quantity = isset($reservation['quantity']) && $reservation['quantity'] > 0 ? $reservation['quantity'] : 1;
             
-            // Check available stock (total - reserved)
-            $available_stock = $product['inventory_qty'] ?? $product['current_stock'] ?? $product['stock'] ?? 0;
+            // Get current physical stock
+            $stock_query = "SELECT quantity FROM inventory WHERE product_id = ?";
+            $stock_stmt = mysqli_prepare($conn, $stock_query);
+            mysqli_stmt_bind_param($stock_stmt, "i", $product_id);
+            mysqli_stmt_execute($stock_stmt);
+            $stock_result = mysqli_stmt_get_result($stock_stmt);
+            $stock_data = mysqli_fetch_assoc($stock_result);
+            $current_stock = $stock_data['quantity'] ?? 0;
             
-            if($available_stock >= $reservation_quantity) {
+            // Check if enough stock
+            if($current_stock >= $reservation_quantity) {
                 mysqli_begin_transaction($conn);
                 
                 try {
@@ -57,7 +52,7 @@ if(isset($_GET['action'])) {
                     mysqli_stmt_bind_param($stmt, "i", $id);
                     mysqli_stmt_execute($stmt);
                     
-                    // Update inventory - DECREASE quantity
+                    // Decrease stock (item is sold)
                     $update_inv = "UPDATE inventory 
                                    SET quantity = quantity - ?,
                                        last_updated = NOW()
@@ -66,42 +61,52 @@ if(isset($_GET['action'])) {
                     mysqli_stmt_bind_param($stmt, "ii", $reservation_quantity, $product_id);
                     mysqli_stmt_execute($stmt);
                     
-                    // Update products table - DECREASE current_stock
+                    // Get updated stock
+                    $new_stock_query = "SELECT quantity FROM inventory WHERE product_id = ?";
+                    $new_stock_stmt = mysqli_prepare($conn, $new_stock_query);
+                    mysqli_stmt_bind_param($new_stock_stmt, "i", $product_id);
+                    mysqli_stmt_execute($new_stock_stmt);
+                    $new_stock_result = mysqli_stmt_get_result($new_stock_stmt);
+                    $new_stock_data = mysqli_fetch_assoc($new_stock_result);
+                    $new_physical = $new_stock_data['quantity'] ?? 0;
+                    
+                    // Update products table
                     $update_prod = "UPDATE products 
-                                    SET current_stock = current_stock - ?,
-                                        available_stock = (current_stock - reserved_stock)
+                                    SET stock = ?,
+                                        current_stock = ?,
+                                        updated_at = NOW()
                                     WHERE id = ?";
                     $stmt = mysqli_prepare($conn, $update_prod);
-                    mysqli_stmt_bind_param($stmt, "ii", $reservation_quantity, $product_id);
+                    mysqli_stmt_bind_param($stmt, "iii", $new_physical, $new_physical, $product_id);
                     mysqli_stmt_execute($stmt);
                     
                     // Log the action
-                    $log_query = "INSERT INTO inventory_logs (product_id, action, quantity, reference_id, reference_type, created_at) 
-                                  VALUES (?, 'reservation_confirm', ?, ?, 'reservation', NOW())";
+                    $log_query = "INSERT INTO inventory_logs (product_id, action, quantity, reference_id, created_at) 
+                                  VALUES (?, 'confirmed', ?, ?, NOW())";
                     $log_stmt = mysqli_prepare($conn, $log_query);
                     mysqli_stmt_bind_param($log_stmt, "iii", $product_id, $reservation_quantity, $id);
                     mysqli_stmt_execute($log_stmt);
                     
-                    // ✅ FIXED: Add notification for user - correct parameter binding
+                    // Add notification for user
                     $notif_query = "INSERT INTO notifications (user_id, title, message, type, reservation_code, created_at) 
                                     VALUES (?, ?, ?, ?, ?, NOW())";
                     $notif_stmt = mysqli_prepare($conn, $notif_query);
                     $notif_title = 'Reservation Confirmed';
                     $notif_type = 'confirmed';
-                    $notif_msg = "Your reservation for " . $reservation['product_name'] . " (x" . $reservation_quantity . ") has been confirmed. Please proceed to the store for pickup.";
+                    $notif_msg = "Your reservation for " . $reservation['product_name'] . " (x" . $reservation_quantity . ") has been confirmed.";
                     mysqli_stmt_bind_param($notif_stmt, "issss", $user_id, $notif_title, $notif_msg, $notif_type, $reservation['ticket_number']);
                     mysqli_stmt_execute($notif_stmt);
                     
                     mysqli_commit($conn);
                     
-                    $_SESSION['message'] = "Reservation confirmed successfully! $reservation_quantity unit(s) deducted from available stock.";
+                    $_SESSION['message'] = "Reservation confirmed successfully! Stock reduced by $reservation_quantity units.";
                     
                 } catch (Exception $e) {
                     mysqli_rollback($conn);
                     $_SESSION['error'] = "Error confirming reservation: " . $e->getMessage();
                 }
             } else {
-                $_SESSION['error'] = "Cannot confirm reservation: Not enough available stock! Available: $available_stock, Requested: $reservation_quantity";
+                $_SESSION['error'] = "Cannot confirm reservation: Not enough stock! Available: $current_stock, Requested: $reservation_quantity";
             }
         } else {
             $_SESSION['message'] = "Reservation is already confirmed!";
@@ -116,51 +121,41 @@ if(isset($_GET['action'])) {
         
         try {
             if($reservation['status'] == 'CONFIRMED') {
-                // If confirmed, restore stock and remove from reserved
+                // Get current stock
+                $stock_query = "SELECT quantity FROM inventory WHERE product_id = ?";
+                $stock_stmt = mysqli_prepare($conn, $stock_query);
+                mysqli_stmt_bind_param($stock_stmt, "i", $product_id);
+                mysqli_stmt_execute($stock_stmt);
+                $stock_result = mysqli_stmt_get_result($stock_stmt);
+                $stock_data = mysqli_fetch_assoc($stock_result);
+                $current_stock = $stock_data['quantity'] ?? 0;
+                
+                // Increase stock back (item is returned)
                 $update_inv = "UPDATE inventory 
                                SET quantity = quantity + ?,
-                                   reserved_quantity = reserved_quantity - ?,
                                    last_updated = NOW()
                                WHERE product_id = ?";
                 $stmt = mysqli_prepare($conn, $update_inv);
-                mysqli_stmt_bind_param($stmt, "iii", $reservation_quantity, $reservation_quantity, $product_id);
+                mysqli_stmt_bind_param($stmt, "ii", $reservation_quantity, $product_id);
                 mysqli_stmt_execute($stmt);
                 
+                // Update products table
+                $new_physical = $current_stock + $reservation_quantity;
                 $update_prod = "UPDATE products 
-                                SET current_stock = current_stock + ?,
-                                    reserved_stock = reserved_stock - ?,
-                                    available_stock = (current_stock - reserved_stock)
+                                SET stock = ?,
+                                    current_stock = ?,
+                                    updated_at = NOW()
                                 WHERE id = ?";
                 $stmt = mysqli_prepare($conn, $update_prod);
-                mysqli_stmt_bind_param($stmt, "iii", $reservation_quantity, $reservation_quantity, $product_id);
+                mysqli_stmt_bind_param($stmt, "iii", $new_physical, $new_physical, $product_id);
                 mysqli_stmt_execute($stmt);
                 
-                $action_log = 'reservation_cancel_confirmed';
-                $notif_type = 'cancelled';
-                $notif_title = 'Reservation Cancelled';
-                $notif_msg = "Your confirmed reservation for " . $reservation['product_name'] . " (x" . $reservation_quantity . ") has been cancelled.";
+                $action_log = 'cancelled_confirmed';
+                $notif_msg = "Your confirmed reservation has been cancelled and item returned to stock.";
             } else {
-                // If pending, just cancel - decrease reserved_quantity only
-                $update_inv = "UPDATE inventory 
-                               SET reserved_quantity = reserved_quantity - ?,
-                                   last_updated = NOW()
-                               WHERE product_id = ?";
-                $stmt = mysqli_prepare($conn, $update_inv);
-                mysqli_stmt_bind_param($stmt, "ii", $reservation_quantity, $product_id);
-                mysqli_stmt_execute($stmt);
-                
-                $update_prod = "UPDATE products 
-                                SET reserved_stock = reserved_stock - ?,
-                                    available_stock = (current_stock - reserved_stock)
-                                WHERE id = ?";
-                $stmt = mysqli_prepare($conn, $update_prod);
-                mysqli_stmt_bind_param($stmt, "ii", $reservation_quantity, $product_id);
-                mysqli_stmt_execute($stmt);
-                
-                $action_log = 'reservation_cancel_pending';
-                $notif_type = 'cancelled';
-                $notif_title = 'Reservation Cancelled';
-                $notif_msg = "Your pending reservation for " . $reservation['product_name'] . " (x" . $reservation_quantity . ") has been cancelled.";
+                // For pending - no stock changes needed (wasn't deducted yet)
+                $action_log = 'cancelled_pending';
+                $notif_msg = "Your pending reservation has been cancelled.";
             }
             
             // Update reservation status
@@ -170,16 +165,18 @@ if(isset($_GET['action'])) {
             mysqli_stmt_execute($stmt);
             
             // Log the action
-            $log_query = "INSERT INTO inventory_logs (product_id, action, quantity, reference_id, reference_type, created_at) 
-                          VALUES (?, ?, ?, ?, 'reservation', NOW())";
+            $log_query = "INSERT INTO inventory_logs (product_id, action, quantity, reference_id, created_at) 
+                          VALUES (?, ?, ?, ?, NOW())";
             $log_stmt = mysqli_prepare($conn, $log_query);
             mysqli_stmt_bind_param($log_stmt, "isii", $product_id, $action_log, $reservation_quantity, $id);
             mysqli_stmt_execute($log_stmt);
             
-            // ✅ FIXED: Add notification for user - correct parameter binding
+            // Add notification for user
             $notif_query = "INSERT INTO notifications (user_id, title, message, type, reservation_code, created_at) 
                             VALUES (?, ?, ?, ?, ?, NOW())";
             $notif_stmt = mysqli_prepare($conn, $notif_query);
+            $notif_title = 'Reservation Cancelled';
+            $notif_type = 'cancelled';
             mysqli_stmt_bind_param($notif_stmt, "issss", $user_id, $notif_title, $notif_msg, $notif_type, $reservation['ticket_number']);
             mysqli_stmt_execute($notif_stmt);
             
@@ -223,12 +220,14 @@ if(isset($_GET['date']) && !empty($_GET['date'])) {
     $types .= "s";
 }
 
-// Get all reservations with filters
-$query = "SELECT r.*, p.name as product_name, p.image, p.stock, p.current_stock, p.reserved_stock,
-                 p.available_stock, r.selected_color, r.selected_size, b.brand_name
+// ✅ FIXED: Get stock directly from inventory (no sold display)
+$query = "SELECT r.*, p.name as product_name, p.image, 
+                 COALESCE(i.quantity, 0) as stock,
+                 r.selected_color, r.selected_size, b.brand_name
           FROM reservations r 
           JOIN products p ON r.product_id = p.id 
           LEFT JOIN brands b ON p.brand_id = b.id
+          LEFT JOIN inventory i ON r.product_id = i.product_id
           WHERE $where_clause 
           ORDER BY 
             CASE r.status 
@@ -268,8 +267,7 @@ $stats_query = "SELECT
                    COUNT(*) as total,
                    SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending,
                    SUM(CASE WHEN status = 'CONFIRMED' THEN 1 ELSE 0 END) as confirmed,
-                   SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) as cancelled,
-                   SUM(CASE WHEN status = 'CONFIRMED' THEN quantity ELSE 0 END) as total_reserved_units
+                   SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) as cancelled
                 FROM reservations";
 $stats_result = mysqli_query($conn, $stats_query);
 $stats = mysqli_fetch_assoc($stats_result);
@@ -308,20 +306,11 @@ $stats = mysqli_fetch_assoc($stats_result);
         }
         .stock-available {
             color: #28a745;
-        }
-        .stock-reserved {
-            color: #ffc107;
+            font-weight: bold;
         }
         .stock-low {
             color: #dc3545;
-        }
-        .notification-badge {
-            background: red;
-            color: white;
-            border-radius: 50%;
-            padding: 2px 6px;
-            font-size: 0.7rem;
-            margin-left: 5px;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -343,15 +332,12 @@ $stats = mysqli_fetch_assoc($stats_result);
                         <a href="inventory.php" class="btn btn-outline-info">
                             <i class="bi bi-clipboard-data"></i> Inventory
                         </a>
-                        <a href="reports.php?type=reservations" class="btn btn-outline-secondary">
-                            <i class="bi bi-file-earmark-bar-graph"></i> Reports
-                        </a>
                     </div>
                 </div>
                 
                 <!-- Statistics Cards -->
                 <div class="row mb-4">
-                    <div class="col-md-3">
+                    <div class="col-md-4">
                         <div class="card bg-primary text-white">
                             <div class="card-body">
                                 <h5 class="card-title">Total Reservations</h5>
@@ -359,7 +345,7 @@ $stats = mysqli_fetch_assoc($stats_result);
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-4">
                         <div class="card bg-warning text-dark">
                             <div class="card-body">
                                 <h5 class="card-title">Pending</h5>
@@ -367,19 +353,11 @@ $stats = mysqli_fetch_assoc($stats_result);
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-4">
                         <div class="card bg-success text-white">
                             <div class="card-body">
                                 <h5 class="card-title">Confirmed</h5>
                                 <h2><?php echo $stats['confirmed'] ?? 0; ?></h2>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card bg-info text-white">
-                            <div class="card-body">
-                                <h5 class="card-title">Reserved Units</h5>
-                                <h2><?php echo $stats['total_reserved_units'] ?? 0; ?></h2>
                             </div>
                         </div>
                     </div>
@@ -442,18 +420,11 @@ $stats = mysqli_fetch_assoc($stats_result);
                                     <i class="bi bi-search"></i> Apply Filters
                                 </button>
                             </div>
-                            <?php if(isset($_GET['product_id']) || isset($_GET['status']) || isset($_GET['date'])): ?>
-                            <div class="col-12">
-                                <a href="reservations.php" class="btn btn-sm btn-outline-secondary">
-                                    <i class="bi bi-x-circle"></i> Clear Filters
-                                </a>
-                            </div>
-                            <?php endif; ?>
                         </form>
                     </div>
                 </div>
 
-                <!-- Reservations Table -->
+                <!-- Reservations Table - Shows same stock as inventory -->
                 <div class="card">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="mb-0">
@@ -474,7 +445,7 @@ $stats = mysqli_fetch_assoc($stats_result);
                                         <th>Color/Size</th>
                                         <th>Phone</th>
                                         <th>Pickup Date</th>
-                                        <th>Available Stock</th>
+                                        <th>Current Stock</th>
                                         <th>Status</th>
                                         <th>Actions</th>
                                     </tr>
@@ -483,20 +454,15 @@ $stats = mysqli_fetch_assoc($stats_result);
                                     <?php foreach($reservations as $row): ?>
                                     <?php 
                                     $reservation_qty = isset($row['quantity']) && $row['quantity'] > 0 ? $row['quantity'] : 1; 
+                                    $current_stock = isset($row['stock']) ? (int)$row['stock'] : 0;
                                     
-                                    // For PENDING reservations, available stock should include this reservation
-                                    if($row['status'] == 'PENDING') {
-                                        $available_stock = ($row['available_stock'] ?? $row['stock'] ?? 0) + $reservation_qty;
-                                    } else {
-                                        $available_stock = $row['available_stock'] ?? $row['stock'] ?? 0;
-                                    }
-                                    
-                                    $reserved_stock = $row['reserved_stock'] ?? 0;
-                                    $stock_class = $available_stock <= 5 ? 'text-danger' : 'text-success';
+                                    $stock_class = $current_stock <= 5 ? 'stock-low' : 'stock-available';
                                     $status = strtolower($row['status']);
-                                    $can_confirm = ($row['status'] == 'PENDING' && $available_stock >= $reservation_qty);
+                                    
+                                    // Check if we can confirm this pending reservation
+                                    $can_confirm = ($row['status'] == 'PENDING' && $current_stock >= $reservation_qty);
                                     ?>
-                                    <tr class="status-<?php echo $row['status']; ?>">
+                                    <tr>
                                         <td><strong><?php echo $row['ticket_number']; ?></strong></td>
                                         <td>
                                             <div class="d-flex align-items-center">
@@ -524,22 +490,11 @@ $stats = mysqli_fetch_assoc($stats_result);
                                         <td><?php echo $row['phone']; ?></td>
                                         <td>
                                             <?php echo date('M d, Y', strtotime($row['pickup_date'])); ?>
-                                            <?php if(strtotime($row['pickup_date']) < time() && $row['status'] == 'CONFIRMED'): ?>
-                                                <br><small class="text-danger">Overdue</small>
-                                            <?php endif; ?>
                                         </td>
                                         <td>
-                                            <div class="stock-info">
-                                                <span class="<?php echo $stock_class; ?> fw-bold">
-                                                    <?php echo $available_stock; ?> units
-                                                </span>
-                                                <?php if($row['status'] == 'PENDING'): ?>
-                                                    <br><small class="text-warning">(Includes this reservation)</small>
-                                                <?php endif; ?>
-                                                <?php if($reserved_stock > 0 && $row['status'] != 'PENDING'): ?>
-                                                    <br><small class="text-warning"><?php echo $reserved_stock; ?> reserved total</small>
-                                                <?php endif; ?>
-                                            </div>
+                                            <span class="<?php echo $stock_class; ?>">
+                                                <?php echo $current_stock; ?> units
+                                            </span>
                                         </td>
                                         <td>
                                             <span class="status-badge <?php echo $status; ?>">
@@ -560,7 +515,7 @@ $stats = mysqli_fetch_assoc($stats_result);
                                                     <?php if($can_confirm): ?>
                                                         <a href="?action=confirm&id=<?php echo $row['id']; ?>" 
                                                            class="btn btn-sm btn-success"
-                                                           onclick="return confirm('Confirm this reservation? This will deduct <?php echo $reservation_qty; ?> unit(s) from available stock.')"
+                                                           onclick="return confirm('Confirm this reservation? This will deduct <?php echo $reservation_qty; ?> unit(s) from stock.')"
                                                            title="Confirm Reservation">
                                                             <i class="bi bi-check-circle"></i>
                                                         </a>
@@ -568,31 +523,24 @@ $stats = mysqli_fetch_assoc($stats_result);
                                                         <button type="button" 
                                                                 class="btn btn-sm btn-secondary" 
                                                                 disabled
-                                                                title="Insufficient stock (Available: <?php echo $available_stock; ?>)">
+                                                                title="Insufficient stock (Available: <?php echo $current_stock; ?>)">
                                                             <i class="bi bi-check-circle"></i>
                                                         </button>
                                                     <?php endif; ?>
                                                     <a href="?action=cancel&id=<?php echo $row['id']; ?>" 
                                                        class="btn btn-sm btn-danger"
-                                                       onclick="return confirm('Cancel this reservation? This will notify the customer.')"
+                                                       onclick="return confirm('Cancel this reservation?')"
                                                        title="Cancel Reservation">
                                                         <i class="bi bi-x-circle"></i>
                                                     </a>
                                                 <?php elseif($row['status'] == 'CONFIRMED'): ?>
                                                     <a href="?action=cancel&id=<?php echo $row['id']; ?>" 
                                                        class="btn btn-sm btn-warning"
-                                                       onclick="return confirm('Cancel this confirmed reservation? This will restore <?php echo $reservation_qty; ?> unit(s) to available stock and notify the customer.')"
-                                                       title="Cancel & Restock">
+                                                       onclick="return confirm('Cancel this confirmed reservation? This will return <?php echo $reservation_qty; ?> unit(s) to stock.')"
+                                                       title="Cancel & Return to Stock">
                                                         <i class="bi bi-arrow-counterclockwise"></i>
                                                     </a>
                                                 <?php endif; ?>
-                                                
-                                                <!-- Link to Product -->
-                                                <a href="products.php?view=<?php echo $row['product_id']; ?>" 
-                                                   class="btn btn-sm btn-outline-primary"
-                                                   title="View Product">
-                                                    <i class="bi bi-box"></i>
-                                                </a>
                                             </div>
                                         </td>
                                     </tr>
@@ -617,18 +565,6 @@ $stats = mysqli_fetch_assoc($stats_result);
 
     <!-- View Details Modals -->
     <?php foreach($reservations as $row): ?>
-    <?php 
-    $reservation_qty = isset($row['quantity']) && $row['quantity'] > 0 ? $row['quantity'] : 1; 
-    
-    if($row['status'] == 'PENDING') {
-        $available_stock = ($row['available_stock'] ?? $row['stock'] ?? 0) + $reservation_qty;
-    } else {
-        $available_stock = $row['available_stock'] ?? $row['stock'] ?? 0;
-    }
-    
-    $reserved_stock = $row['reserved_stock'] ?? 0;
-    $total_stock = $available_stock + $reserved_stock;
-    ?>
     <div class="modal fade" id="viewModal<?php echo $row['id']; ?>" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
@@ -663,28 +599,11 @@ $stats = mysqli_fetch_assoc($stats_result);
                                 </tr>
                                 <tr>
                                     <th>Product:</th>
-                                    <td>
-                                        <?php echo $row['product_name']; ?>
-                                        <br>
-                                        <small class="text-muted">Brand: <?php echo $row['brand_name'] ?? 'N/A'; ?></small>
-                                    </td>
+                                    <td><?php echo $row['product_name']; ?></td>
                                 </tr>
                                 <tr>
                                     <th>Quantity:</th>
-                                    <td><span class="badge bg-primary"><?php echo $reservation_qty; ?> pcs</span></td>
-                                </tr>
-                                <tr>
-                                    <th>Color/Size:</th>
-                                    <td>
-                                        <?php if(!empty($row['selected_color'])): ?>
-                                            <span class="badge" style="background-color: <?php echo strtolower($row['selected_color']); ?>; color: white;">
-                                                <?php echo $row['selected_color']; ?>
-                                            </span>
-                                        <?php endif; ?>
-                                        <?php if(!empty($row['selected_size'])): ?>
-                                            <span class="badge bg-secondary"><?php echo $row['selected_size']; ?></span>
-                                        <?php endif; ?>
-                                    </td>
+                                    <td><?php echo $row['quantity']; ?> pcs</td>
                                 </tr>
                                 <tr>
                                     <th>Customer:</th>
@@ -695,80 +614,22 @@ $stats = mysqli_fetch_assoc($stats_result);
                                     <td><?php echo $row['phone']; ?></td>
                                 </tr>
                                 <tr>
-                                    <th>Email:</th>
-                                    <td><?php echo $row['email'] ?? 'N/A'; ?></td>
-                                </tr>
-                                <tr>
                                     <th>Pickup Date:</th>
                                     <td><?php echo date('F d, Y', strtotime($row['pickup_date'])); ?></td>
                                 </tr>
                                 <tr>
-                                    <th>Reservation Date:</th>
-                                    <td><?php echo date('F d, Y h:i A', strtotime($row['created_at'])); ?></td>
-                                </tr>
-                                <tr>
-                                    <th>Stock Status:</th>
+                                    <th>Current Stock:</th>
                                     <td>
-                                        <div>
-                                            <span class="<?php echo $available_stock <= 5 ? 'text-danger' : 'text-success'; ?>">
-                                                <i class="bi bi-box"></i> Available: <?php echo $available_stock; ?>
-                                            </span>
-                                        </div>
-                                        <?php if($reserved_stock > 0): ?>
-                                            <div>
-                                                <span class="text-warning">
-                                                    <i class="bi bi-lock"></i> Reserved: <?php echo $reserved_stock; ?>
-                                                </span>
-                                            </div>
-                                        <?php endif; ?>
-                                        <div>
-                                            <span class="text-info">
-                                                <i class="bi bi-grid"></i> Total: <?php echo $total_stock; ?>
-                                            </span>
-                                        </div>
-                                        <?php if($row['status'] == 'PENDING'): ?>
-                                            <div class="alert alert-warning mt-2 mb-0 py-1 px-2">
-                                                <small><i class="bi bi-info-circle"></i> This pending reservation is included in available stock (<?php echo $reservation_qty; ?> unit reserved)</small>
-                                            </div>
-                                        <?php endif; ?>
+                                        <span class="<?php echo $row['stock'] <= 5 ? 'text-danger' : 'text-success'; ?>">
+                                            <?php echo $row['stock']; ?> units
+                                        </span>
                                     </td>
                                 </tr>
                             </table>
                         </div>
                     </div>
-                    
-                    <?php if(!empty($row['notes'])): ?>
-                    <div class="row mt-3">
-                        <div class="col-12">
-                            <div class="alert alert-info">
-                                <strong>Notes:</strong><br>
-                                <?php echo nl2br($row['notes']); ?>
-                            </div>
-                        </div>
-                    </div>
-                    <?php endif; ?>
                 </div>
                 <div class="modal-footer">
-                    <?php if($row['status'] == 'PENDING' && $available_stock >= $reservation_qty): ?>
-                        <a href="?action=confirm&id=<?php echo $row['id']; ?>" 
-                           class="btn btn-success"
-                           onclick="return confirm('Confirm this reservation? This will deduct <?php echo $reservation_qty; ?> unit(s) from available stock.')">
-                            <i class="bi bi-check-circle"></i> Confirm Reservation
-                        </a>
-                    <?php elseif($row['status'] == 'PENDING' && $available_stock < $reservation_qty): ?>
-                        <button type="button" class="btn btn-secondary" disabled>
-                            <i class="bi bi-exclamation-triangle"></i> Insufficient Stock (Available: <?php echo $available_stock; ?>)
-                        </button>
-                    <?php endif; ?>
-                    
-                    <?php if($row['status'] != 'CANCELLED'): ?>
-                        <a href="?action=cancel&id=<?php echo $row['id']; ?>" 
-                           class="btn btn-danger"
-                           onclick="return confirm('Cancel this reservation? This will notify the customer.')">
-                            <i class="bi bi-x-circle"></i> Cancel Reservation
-                        </a>
-                    <?php endif; ?>
-                    
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>

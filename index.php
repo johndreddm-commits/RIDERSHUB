@@ -19,8 +19,7 @@ if(isset($_SESSION['cart'])) {
 $stats_query = "SELECT 
                    COUNT(DISTINCT p.id) as total_products,
                    COUNT(DISTINCT b.id) as total_brands,
-                   SUM(CASE WHEN GREATEST(0, COALESCE(i.quantity, p.quantity, p.stock, 0) - COALESCE(i.reserved_quantity, 0)) > 0 THEN 1 ELSE 0 END) as in_stock_products,
-                   SUM(COALESCE(i.reserved_quantity, 0)) as total_reserved
+                   SUM(CASE WHEN COALESCE(i.quantity, 0) > 0 THEN 1 ELSE 0 END) as in_stock_products
                 FROM products p
                 LEFT JOIN brands b ON p.brand_id = b.id
                 LEFT JOIN inventory i ON p.id = i.product_id
@@ -28,21 +27,19 @@ $stats_query = "SELECT
 $stats_result = $conn->query($stats_query);
 $stats = $stats_result->fetch_assoc();
 
-// ✅ FIXED: Get products with accurate available stock (same formula as inventory.php)
+// ✅ FIXED: Get products with stock directly from inventory (no sold)
 $products = $conn->query("
     SELECT p.*, 
            IFNULL(b.brand_name, 'unknown') AS brand_name,
-           COALESCE(i.quantity, p.quantity, p.stock, 0) as total_stock,
-           COALESCE(i.reserved_quantity, 0) as reserved_stock,
-           GREATEST(0, COALESCE(i.quantity, p.quantity, p.stock, 0) - COALESCE(i.reserved_quantity, 0)) as available_stock,
-           i.min_stock
+           COALESCE(i.quantity, 0) as stock,
+           COALESCE(i.min_stock, 5) as min_stock
     FROM products p
     LEFT JOIN brands b ON p.brand_id = b.id
     LEFT JOIN inventory i ON p.id = i.product_id
     WHERE p.status = 'active'
     ORDER BY 
         CASE 
-            WHEN GREATEST(0, COALESCE(i.quantity, p.quantity, p.stock, 0) - COALESCE(i.reserved_quantity, 0)) > 0 THEN 1
+            WHEN COALESCE(i.quantity, 0) > 0 THEN 1
             ELSE 2
         END,
         p.created_at DESC
@@ -54,13 +51,13 @@ $nav_brands = $conn->query("SELECT * FROM brands ORDER BY brand_name ASC");
 // Fetch helmet types for navigation
 $helmet_types = ['full-face', 'modular', 'half-face', 'open-face', 'off-road'];
 
-// Get low stock warning for admin (optional - can be removed if not needed)
+// Get low stock warning for admin
 $low_stock_query = "SELECT COUNT(*) as low_stock_count 
                     FROM products p
                     LEFT JOIN inventory i ON p.id = i.product_id
                     WHERE p.status = 'active' 
-                    AND GREATEST(0, COALESCE(i.quantity, p.quantity, p.stock, 0) - COALESCE(i.reserved_quantity, 0)) <= COALESCE(i.min_stock, 5)
-                    AND GREATEST(0, COALESCE(i.quantity, p.quantity, p.stock, 0) - COALESCE(i.reserved_quantity, 0)) > 0";
+                    AND COALESCE(i.quantity, 0) <= COALESCE(i.min_stock, 5)
+                    AND COALESCE(i.quantity, 0) > 0";
 $low_stock_result = $conn->query($low_stock_query);
 $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
 ?>
@@ -91,7 +88,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             overflow-x: hidden;
         }
         
-        /* ===== NAVIGATION (PRESERVED) ===== */
+        /* ===== NAVIGATION ===== */
         .nav {
             position: fixed;
             top: 0;
@@ -404,10 +401,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             color: red;
         }
         
-        .mobile-menu-btn:active {
-            transform: scale(0.95);
-        }
-        
         .close-menu-btn {
             display: none;
             position: absolute;
@@ -484,23 +477,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             transform: scale(1.02);
         }
 
-        /* Quick Product Links */
-        .quick-product-link {
-            display: inline-block;
-            margin-left: 20px;
-            color: #ff6666;
-            font-size: 0.85rem;
-            text-decoration: none;
-            border-left: 1px solid #333;
-            padding-left: 15px;
-        }
-        
-        .quick-product-link:hover {
-            color: red;
-            text-decoration: underline;
-        }
-
-        /* ===== HERO SECTION - ENHANCED ===== */
+        /* ===== HERO SECTION ===== */
         .hero-section {
             margin-top: 100px;
             min-height: 100vh;
@@ -1200,8 +1177,13 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             animation: badgePulse 2s infinite;
         }
 
-        .product-badge.reserved {
+        .product-badge.low-stock {
             background: #ff9900;
+            color: #000;
+        }
+
+        .product-badge.out-of-stock {
+            background: #666;
         }
 
         @keyframes badgePulse {
@@ -1277,6 +1259,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             transform: scale(1.05);
         }
         
+        /* Stock display styles */
         .stock-tag {
             background: rgba(0, 255, 0, 0.1);
             color: #00ff00;
@@ -1287,6 +1270,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             margin: 10px auto;
             border: 1px solid #00ff0033;
             transition: all 0.3s ease;
+            text-align: center;
         }
 
         .product-card:hover .stock-tag {
@@ -1302,13 +1286,14 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         
         .out-of-stock-tag {
             background: rgba(255, 0, 0, 0.1);
-            color: red;
+            color: #ff4444;
             padding: 5px 10px;
             border-radius: 5px;
             font-size: 0.9rem;
             display: inline-block;
             margin: 10px auto;
             border: 1px solid rgba(255, 0, 0, 0.3);
+            text-align: center;
             transition: all 0.3s ease;
         }
 
@@ -1344,10 +1329,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         }
 
         .cart-btn::before,
-        .reserve-btn::before,
-        .filter-btn::before,
-        .add-to-cart-submit::before,
-        .submit-res-btn::before {
+        .reserve-btn::before {
             content: '';
             position: absolute;
             top: 50%;
@@ -1361,10 +1343,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         }
 
         .cart-btn:hover::before,
-        .reserve-btn:hover::before,
-        .filter-btn:hover::before,
-        .add-to-cart-submit:hover::before,
-        .submit-res-btn:hover::before {
+        .reserve-btn:hover::before {
             width: 300px;
             height: 300px;
         }
@@ -1395,6 +1374,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             opacity: 0.5;
             cursor: not-allowed;
             background: #444;
+            border-color: #666;
         }
 
         /* ===== MODALS ===== */
@@ -2069,48 +2049,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 right: 0;
             }
             
-            .nav-menu.active li {
-                animation: slideInRight 0.3s ease forwards;
-                animation-delay: calc(0.05s * var(--i));
-            }
-            
-            .nav-menu.active li:nth-child(1) { --i: 1; }
-            .nav-menu.active li:nth-child(2) { --i: 2; }
-            .nav-menu.active li:nth-child(3) { --i: 3; }
-            .nav-menu.active li:nth-child(4) { --i: 4; }
-            .nav-menu.active li:nth-child(5) { --i: 5; }
-
-            @keyframes slideInRight {
-                from {
-                    opacity: 0;
-                    transform: translateX(50px);
-                }
-                to {
-                    opacity: 1;
-                    transform: translateX(0);
-                }
-            }
-            
-            .nav-menu li a {
-                padding: 15px 20px;
-            }
-            
-            .dropdown-menu {
-                position: static;
-                background: rgba(30, 30, 30, 0.95);
-                margin: 5px 0 5px 20px;
-                display: none;
-                min-width: 100%;
-            }
-            
-            .dropdown.active .dropdown-menu {
-                display: block;
-            }
-            
-            .dropdown-menu li a {
-                white-space: normal;
-            }
-            
             .close-menu-btn {
                 display: block;
             }
@@ -2142,44 +2080,17 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 gap: 20px;
             }
             
-            .hero-badges {
-                position: relative;
-                margin-top: 30px;
-            }
-            
             .featured-grid {
                 grid-template-columns: repeat(2, 1fr);
                 gap: 15px;
             }
             
-            .featured-card {
-                min-height: 280px;
-                padding: 20px 15px;
+            .about-grid {
+                grid-template-columns: 1fr;
             }
             
-            .featured-icon {
-                width: 60px;
-                height: 60px;
-                font-size: 2rem;
-                margin-bottom: 15px;
-            }
-            
-            .featured-title {
-                font-size: 1.1rem;
-                min-height: 35px;
-            }
-            
-            .featured-text {
-                font-size: 0.8rem;
-                line-height: 1.4;
-            }
-            
-            .about-card {
-                padding: 30px;
-            }
-            
-            .about-card h3 {
-                font-size: 1.5rem;
+            .about-stats {
+                grid-template-columns: repeat(2, 1fr);
             }
             
             .products-section h2 {
@@ -2204,25 +2115,12 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 margin: 5px 0;
             }
             
-            .footer-grid {
-                gap: 30px;
-            }
-
             .newsletter-form {
                 flex-direction: column;
             }
 
             .newsletter-form button {
                 width: 100%;
-            }
-
-            .footer-bottom {
-                flex-direction: column;
-                text-align: center;
-            }
-
-            .footer-bottom-links {
-                justify-content: center;
             }
         }
         
@@ -2241,10 +2139,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 margin: 0 auto;
             }
             
-            .featured-card {
-                min-height: auto;
-            }
-            
             .products-grid {
                 grid-template-columns: 1fr;
             }
@@ -2258,14 +2152,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 width: 100%;
             }
             
-            .back-to-top {
-                bottom: 20px;
-                right: 20px;
-                width: 45px;
-                height: 45px;
-                font-size: 18px;
-            }
-            
             .brands-slider {
                 grid-template-columns: repeat(2, 1fr);
             }
@@ -2274,33 +2160,16 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 grid-template-columns: 1fr;
             }
             
-            .stat-number {
-                font-size: 2.5rem;
-            }
-            
             .section-title {
                 font-size: 2rem;
             }
             
-            .footer-title::after {
-                left: 50%;
-                transform: translateX(-50%);
-            }
-
-            .footer-col {
+            .footer-bottom {
+                flex-direction: column;
                 text-align: center;
-                align-items: center;
             }
 
-            .footer-links li a {
-                justify-content: center;
-            }
-
-            .footer-contact li {
-                justify-content: center;
-            }
-
-            .social-links {
+            .footer-bottom-links {
                 justify-content: center;
             }
         }
@@ -2319,7 +2188,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         <i class="fas fa-arrow-up"></i>
     </button>
 
-    <!-- Navigation with Improved Dropdown -->
+    <!-- Navigation -->
     <nav class="nav">
         <div class="nav-left">
             <img src="images/589828036_1222267966428855_4924886836244892648_n-removebg-preview.png" class="nav-logo" alt="Logo">
@@ -2381,8 +2250,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 </ul>
             </li>
             
-            
-            
             <li>
                 <a href="cart.php"><i class="fas fa-shopping-cart"></i> CART <span class="cart-count" id="navCartCount"><?= $cart_count ?></span></a>
             </li>
@@ -2417,14 +2284,14 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         <button class="filter-btn" data-filter="type">TYPES</button>
     </div>
 
-    <!-- Hero Section - ENHANCED -->
+    <!-- Hero Section -->
     <section class="hero-section" id="hero">
         <div class="hero-content">
             <h1 class="hero-title">KNOW YOUR BREAKS</h1>
             <p class="hero-subtitle">When necessities meets your expectation</p>
             <a href="javascript:void(0)" onclick="showProducts()" class="hero-button">EXPLORE COLLECTION</a>
             
-            <!-- Hero Stats with Real Data -->
+            <!-- Hero Stats -->
             <div class="hero-stats">
                 <div class="stat-item">
                     <div class="stat-number"><?= $stats['total_products'] ?? 0 ?></div>
@@ -2438,12 +2305,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     <div class="stat-number"><?= $stats['in_stock_products'] ?? 0 ?></div>
                     <div class="stat-label">In Stock</div>
                 </div>
-                <?php if(($stats['total_reserved'] ?? 0) > 0): ?>
-                <div class="stat-item">
-                    <div class="stat-number"><?= $stats['total_reserved'] ?? 0 ?></div>
-                    <div class="stat-label">Reserved</div>
-                </div>
-                <?php endif; ?>
             </div>
         </div>
         
@@ -2485,7 +2346,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     <?php 
                     switch($type) {
                         case 'full-face':
-                            echo 'Maximum protection for high-speed riding with complete head coverage and advanced aerodynamics.';
+                            echo 'Maximum protection for high-speed riding with complete head coverage.';
                             break;
                         case 'modular':
                             echo 'Versatile flip-up design combining full-face protection with open-face convenience.';
@@ -2531,7 +2392,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         </div>
     </section>
 
-    <!-- About Section with Mission & Vision -->
+    <!-- About Section -->
     <section class="about-section" id="about">
         <div class="about-container">
             <h2 class="section-title">ABOUT RIDERSHUB</h2>
@@ -2558,7 +2419,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                             <i class="fas fa-eye"></i>
                         </div>
                         <h3>Our Vision</h3>
-                        <p>Our vision is to become a trusted and leading helmet store known for delivering superior protection, excellent customer service, and affordable pricing—ensuring that every rider can prioritize safety without compromising quality or cost.</p>
+                        <p>To become a trusted and leading helmet store known for delivering superior protection, excellent customer service, and affordable pricing—ensuring that every rider can prioritize safety without compromising quality or cost.</p>
                         <div class="vision-badge">
                             <span>Trusted</span>
                             <span>Leading</span>
@@ -2638,32 +2499,26 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     $helmet_type = strtolower($p['helmet_type'] ?? 'full-face');
                     $helmet_type_for_filter = str_replace(' ', '-', $helmet_type);
                     
-                    // ✅ FIXED: Use the same available_stock calculation as inventory.php
-                    $available_stock = $p['available_stock'] ?? 0;
-                    $total_stock = $p['total_stock'] ?? 0;
-                    $reserved_stock = $p['reserved_stock'] ?? 0;
-                    
-                    // Additional safety: Ensure available stock doesn't exceed total stock
-                    $available_stock = min($available_stock, $total_stock);
+                    // Get stock directly from inventory
+                    $stock = $p['stock'] ?? 0;
+                    $min_stock = $p['min_stock'] ?? 5;
                     
                     $brand_name = strtolower($p['brand_name'] ?? 'unknown');
                     
                     // Determine stock status for badge
                     $badge_class = '';
                     $badge_text = '';
-                    if($available_stock > 0) {
-                        if($available_stock <= ($p['min_stock'] ?? 5)) {
+                    
+                    if($stock > 0) {
+                        if($stock <= $min_stock) {
                             $badge_class = 'low-stock';
                             $badge_text = 'LOW STOCK';
                         } else {
-                            $badge_class = '';
+                            $badge_class = 'in-stock';
                             $badge_text = 'IN STOCK';
                         }
-                    } else if($total_stock > 0) {
-                        $badge_class = 'reserved';
-                        $badge_text = 'RESERVED ONLY';
                     } else {
-                        $badge_class = '';
+                        $badge_class = 'out-of-stock';
                         $badge_text = 'OUT OF STOCK';
                     }
             ?>
@@ -2671,22 +2526,13 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                      data-brand="<?= $brand_name ?>" 
                      data-helmet-type="<?= $helmet_type_for_filter ?>"
                      data-name="<?= strtolower(htmlspecialchars($p['name'] ?? '')) ?>"
-                     data-available="<?= $available_stock ?>">
+                     data-stock="<?= $stock ?>">
                     
-                    <?php if($available_stock > 0): ?>
-                        <span class="product-badge <?= $badge_class ?>">
-                            <i class="fas fa-<?= $available_stock <= ($p['min_stock'] ?? 5) ? 'exclamation-triangle' : 'check-circle' ?>"></i> 
-                            <?= $badge_text ?>
-                        </span>
-                    <?php elseif($total_stock > 0): ?>
-                        <span class="product-badge reserved">
-                            <i class="fas fa-clock"></i> <?= $badge_text ?>
-                        </span>
-                    <?php else: ?>
-                        <span class="product-badge" style="background: #666;">
-                            <i class="fas fa-times-circle"></i> <?= $badge_text ?>
-                        </span>
-                    <?php endif; ?>
+                    <!-- Product Badge -->
+                    <span class="product-badge <?= $badge_class ?>">
+                        <i class="fas fa-<?= $stock > 0 ? ($stock <= $min_stock ? 'exclamation-triangle' : 'check-circle') : 'times-circle' ?>"></i> 
+                        <?= $badge_text ?>
+                    </span>
                     
                     <img src="uploads/<?= htmlspecialchars($p['image'] ?? '') ?>" alt="<?= htmlspecialchars($p['name'] ?? 'Product') ?>">
                     
@@ -2695,16 +2541,10 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                         <div class="product-brand"><i class="fas fa-tag"></i> <?= ucfirst($p['brand_name'] ?? 'Unknown') ?></div>
                         <p class="product-price">₱<?= number_format($p['price'] ?? 0, 2) ?></p>
                         
-                        <?php if($available_stock > 0): ?>
-                            <span class="stock-tag <?= $available_stock <= ($p['min_stock'] ?? 5) ? 'low-stock' : '' ?>">
-                                <i class="fas fa-check-circle"></i> <?= $available_stock ?> Available
-                                <?php if($reserved_stock > 0): ?>
-                                    <br><small style="font-size: 0.7rem; color: #ffaa00;">(<?= $reserved_stock ?> reserved)</small>
-                                <?php endif; ?>
-                            </span>
-                        <?php elseif($total_stock > 0): ?>
-                            <span class="out-of-stock-tag">
-                                <i class="fas fa-clock"></i> All <?= $total_stock ?> Reserved
+                        <!-- Stock display - shows current stock only -->
+                        <?php if($stock > 0): ?>
+                            <span class="stock-tag <?= $stock <= $min_stock ? 'low-stock' : '' ?>">
+                                <i class="fas fa-check-circle"></i> <?= $stock ?> Available
                             </span>
                         <?php else: ?>
                             <span class="out-of-stock-tag">
@@ -2715,8 +2555,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     
                     <div class="action-buttons">
                         <button class="cart-btn" 
-                                onclick="addToCart(<?= $p['id'] ?? 0 ?>, '<?= htmlspecialchars(addslashes($p['name'] ?? '')) ?>', <?= $p['price'] ?? 0 ?>, '<?= htmlspecialchars(addslashes($p['colors'] ?? 'Standard')) ?>', '<?= htmlspecialchars(addslashes($p['sizes'] ?? 'One Size')) ?>', <?= $available_stock ?>)"
-                                <?= $available_stock > 0 ? '' : 'disabled' ?>>
+                                onclick="addToCart(<?= $p['id'] ?? 0 ?>, '<?= htmlspecialchars(addslashes($p['name'] ?? '')) ?>', <?= $p['price'] ?? 0 ?>, '<?= htmlspecialchars(addslashes($p['colors'] ?? 'Standard')) ?>', '<?= htmlspecialchars(addslashes($p['sizes'] ?? 'One Size')) ?>', <?= $stock ?>)"
+                                <?= $stock > 0 ? '' : 'disabled' ?>>
                             <i class="fas fa-cart-plus"></i> CART
                         </button>
                         <button class="reserve-btn" 
@@ -2724,10 +2564,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                                 data-id="<?= $p['id'] ?? 0 ?>"
                                 data-colors="<?= htmlspecialchars($p['colors'] ?? 'Standard') ?>"
                                 data-sizes="<?= htmlspecialchars($p['sizes'] ?? 'One Size') ?>"
-                                data-stock="<?= $available_stock ?>"
-                                data-total-stock="<?= $total_stock ?>"
-                                data-reserved="<?= $reserved_stock ?>"
-                                <?= $available_stock > 0 ? '' : 'disabled' ?>> 
+                                data-stock="<?= $stock ?>"
+                                <?= $stock > 0 ? '' : 'disabled' ?>> 
                             <i class="fas fa-calendar-check"></i> RESERVE
                         </button>
                     </div>
@@ -2778,7 +2616,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             <span class="close-modal" onclick="closeModal('reserveModal')">&times;</span>
             <h2>RESERVATION</h2>
             <p id="modalProductName" style="color: red;"></p>
-            <div id="modalStockDisplay" class="stock-tag">Available Stock: 0</div> 
+            <div id="modalStockDisplay" class="stock-tag">Current Stock: 0</div> 
             
             <form id="reservationForm">
                 <input type="hidden" name="product_id" id="modalProductId">
@@ -2825,7 +2663,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     <p class="footer-description">
                         Your premier destination for premium motorcycle helmets and gears. Ride safe, ride stylish.
                     </p>
-                    
                 </div>
 
                 <!-- Quick Links -->
@@ -2922,7 +2759,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             document.getElementById('loadingOverlay').classList.remove('active');
         }, 500);
         
-        // Update URL hash
         window.location.hash = 'products';
     }
 
@@ -2930,28 +2766,16 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
     function filterByBrandAndShow(brandSlug) {
         currentBrand = brandSlug;
         currentType = "all";
-        
-        // Show products section first
         showProducts();
-        
-        // Apply filter after a slight delay
-        setTimeout(() => {
-            filterProducts();
-        }, 300);
+        setTimeout(() => { filterProducts(); }, 300);
     }
 
     // Function to filter by type and show products
     function filterByTypeAndShow(type) {
         currentType = type;
         currentBrand = "all";
-        
-        // Show products section first
         showProducts();
-        
-        // Apply filter after a slight delay
-        setTimeout(() => {
-            filterProducts();
-        }, 300);
+        setTimeout(() => { filterProducts(); }, 300);
     }
 
     // Filter Products Function
@@ -2959,14 +2783,11 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         cards.forEach(card => {
             const cardBrand = card.dataset.brand;
             const cardType = card.dataset.helmetType;
-
             const matchBrand = currentBrand === "all" || cardBrand === currentBrand;
             const matchType = currentType === "all" || cardType === currentType;
-
             card.style.display = (matchBrand && matchType) ? "flex" : "none";
         });
 
-        // Show loading animation
         document.getElementById('loadingOverlay').classList.add('active');
         setTimeout(() => {
             document.getElementById('loadingOverlay').classList.remove('active');
@@ -2976,7 +2797,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
     // Newsletter subscription
     function subscribeNewsletter() {
         const email = document.getElementById('newsletterEmail').value;
-        
         Swal.fire({
             title: 'SUCCESS!',
             text: 'Thank you for subscribing to our newsletter!',
@@ -2985,7 +2805,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             color: '#fff',
             confirmButtonColor: '#ff0000'
         });
-        
         document.getElementById('newsletterEmail').value = '';
     }
 
@@ -2993,19 +2812,17 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
     function closeModal(modalId) {
         document.getElementById(modalId).style.display = "none";
         document.body.style.overflow = '';
-        
-        // Remove stock info from cart modal if exists
         const stockInfo = document.querySelector('.stock-info-modal');
         if(stockInfo) stockInfo.remove();
     }
 
     // Add to Cart Function
-    function addToCart(productId, productName, price, colors, sizes, availableStock) {
-        if(availableStock <= 0) {
+    function addToCart(productId, productName, price, colors, sizes, stock) {
+        if(stock <= 0) {
             Swal.fire({
                 icon: 'error',
                 title: 'Out of Stock',
-                text: 'This item is currently out of stock or fully reserved.',
+                text: 'This item is currently out of stock.',
                 background: '#111',
                 color: '#fff',
                 confirmButtonColor: '#ff0000'
@@ -3013,7 +2830,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             return;
         }
         
-        // Safe parsing
         const colorArray = colors ? colors.split(',').map(c => c.trim()).filter(c => c) : ['Standard'];
         const sizeArray = sizes ? sizes.split(',').map(s => s.trim()).filter(s => s) : ['One Size'];
         
@@ -3039,22 +2855,20 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             sizeSelect.appendChild(option);
         });
         
-        document.getElementById('quickCartQuantity').max = availableStock;
+        document.getElementById('quickCartQuantity').max = stock;
         document.getElementById('quickCartQuantity').value = 1;
         
-        // Show available stock in modal
         const stockInfo = document.createElement('small');
         stockInfo.style.display = 'block';
-        stockInfo.style.color = availableStock <= 5 ? '#ff9900' : '#00ff00';
+        stockInfo.style.color = stock <= 5 ? '#ff9900' : '#00ff00';
         stockInfo.style.marginTop = '5px';
         stockInfo.style.fontSize = '0.9rem';
         stockInfo.className = 'stock-info-modal';
-        stockInfo.innerHTML = `<i class="fas fa-${availableStock <= 5 ? 'exclamation-triangle' : 'check-circle'}"></i> ${availableStock} units available`;
+        stockInfo.innerHTML = `<i class="fas fa-${stock <= 5 ? 'exclamation-triangle' : 'check-circle'}"></i> ${stock} units available`;
         
         const modalContent = document.querySelector('#quickCartModal .quick-cart-content');
         const existingInfo = modalContent.querySelector('.stock-info-modal');
         if(existingInfo) existingInfo.remove();
-        
         modalContent.insertBefore(stockInfo, document.getElementById('quickCartForm'));
         
         document.getElementById('quickCartModal').style.display = 'block';
@@ -3093,7 +2907,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         const type = urlParams.get('type');
         
         if (brand || type) {
-            // Show products section if there are filters
             document.getElementById('products').classList.add('visible');
         }
         
@@ -3149,8 +2962,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             } else {
                 nav.classList.remove('scrolled');
             }
-            
-            // Back to top button
             backToTopBtn.style.display = window.pageYOffset > 300 ? 'flex' : 'none';
         });
         
@@ -3210,15 +3021,10 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         if (mobileSearchInput) {
             mobileSearchInput.addEventListener('input', (e) => {
                 const searchTerm = e.target.value.toLowerCase().trim();
-                
                 cards.forEach(card => {
                     const productName = card.getAttribute('data-name') || '';
                     const brandName = card.getAttribute('data-brand') || '';
-                    
-                    const displayCard = productName.includes(searchTerm) || 
-                                       brandName.includes(searchTerm) || 
-                                       searchTerm === '';
-                    
+                    const displayCard = productName.includes(searchTerm) || brandName.includes(searchTerm) || searchTerm === '';
                     card.style.display = displayCard ? 'flex' : 'none';
                 });
             });
@@ -3229,7 +3035,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             btn.addEventListener('click', () => {
                 filterButtons.forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                
                 if (window.innerWidth <= 768) {
                     loadingOverlay.classList.add('active');
                     setTimeout(() => {
@@ -3246,7 +3051,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             });
         }
         
-        // Detect helmet type from product name (fallback)
+        // Detect helmet type from product name
         function detectHelmetTypeFromName(productName) {
             const name = productName.toLowerCase();
             if (name.includes('full')) return 'full-face';
@@ -3270,42 +3075,25 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
         // Reservation Modal
         document.querySelectorAll('.reserve-btn').forEach(button => {
             button.addEventListener('click', function() {
-                const availableStock = parseInt(this.getAttribute('data-stock')) || 0;
-                const totalStock = parseInt(this.getAttribute('data-total-stock')) || 0;
-                const reservedStock = parseInt(this.getAttribute('data-reserved')) || 0;
+                const stock = parseInt(this.getAttribute('data-stock')) || 0;
                 
                 modalProductName.innerText = "Item: " + (this.getAttribute('data-name') || 'Unknown');
                 modalProductId.value = this.getAttribute('data-id') || 0;
-                modalStockDisplay.innerText = "Available Stock: " + availableStock;
                 
-                if(availableStock > 0) {
-                    modalQuantity.max = availableStock;
+                if(stock > 0) {
+                    modalStockDisplay.innerText = "Current Stock: " + stock;
+                    modalStockDisplay.className = stock <= 5 ? 'stock-tag low-stock' : 'stock-tag';
+                    modalQuantity.max = stock;
                     modalQuantity.value = 1;
                     modalQuantity.disabled = false;
                     document.querySelector('#reservationForm .submit-res-btn').disabled = false;
-                    
-                    // Show additional info
-                    if(reservedStock > 0) {
-                        modalStockDisplay.innerHTML += `<br><small style="color: #ffaa00;">(${reservedStock} units already reserved)</small>`;
-                    }
-                    
-                    if(availableStock <= 5) {
-                        modalStockDisplay.style.color = '#ff9900';
-                    } else {
-                        modalStockDisplay.style.color = '#00ff00';
-                    }
                 } else {
+                    modalStockDisplay.innerText = "Out of Stock";
+                    modalStockDisplay.className = 'out-of-stock-tag';
                     modalQuantity.max = 0;
                     modalQuantity.value = 0;
                     modalQuantity.disabled = true;
                     document.querySelector('#reservationForm .submit-res-btn').disabled = true;
-                    
-                    if(totalStock > 0) {
-                        modalStockDisplay.innerText = "All " + totalStock + " units are reserved";
-                        modalStockDisplay.style.color = '#ff9900';
-                    } else {
-                        modalStockDisplay.style.color = '#ff0000';
-                    }
                 }
                 
                 // Colors
@@ -3350,7 +3138,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                         this.reset();
                         updateCartCount(data.cart_count);
                         
-                        // Remove stock info
                         const stockInfo = document.querySelector('.stock-info-modal');
                         if(stockInfo) stockInfo.remove();
                         
@@ -3420,7 +3207,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                         document.body.style.overflow = '';
                         this.reset();
                         
-                        // Update the product card's available stock (simple refresh)
                         setTimeout(() => {
                             location.reload();
                         }, 3000);
@@ -3469,7 +3255,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 modal.style.display = "none";
                 quickCartModal.style.display = "none";
                 document.body.style.overflow = '';
-                
                 const stockInfo = document.querySelector('.stock-info-modal');
                 if(stockInfo) stockInfo.remove();
             }
@@ -3481,10 +3266,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                 modal.style.display = "none";
                 quickCartModal.style.display = "none";
                 document.body.style.overflow = '';
-                
                 const stockInfo = document.querySelector('.stock-info-modal');
                 if(stockInfo) stockInfo.remove();
-                
                 if (window.innerWidth <= 768) navMenu.classList.remove('active');
             }
         });
@@ -3507,7 +3290,7 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
             document.getElementById('products').classList.add('visible');
         }
 
-        // Animated Stats Counter for About Section
+        // Animated Stats Counter
         function animateStats() {
             const stats = document.querySelectorAll('.stat-number');
             stats.forEach(stat => {
@@ -3541,7 +3324,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     }
                 });
             }, { threshold: 0.5 });
-            
             observer.observe(aboutSection);
         }
     });
