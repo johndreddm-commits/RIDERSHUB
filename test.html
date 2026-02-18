@@ -1,0 +1,1176 @@
+<?php
+session_start();
+require_once "config.php";
+
+if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true){
+    header("location: login.php");
+    exit;
+}
+
+$products = $conn->query("
+    SELECT p.*, b.brand_name
+    FROM products p
+    LEFT JOIN brands b ON p.brand_id = b.id
+    WHERE p.status = 'active'
+    ORDER BY p.id DESC
+");
+
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Audiowide&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>KB Ridershub</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Responsive Styles */
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            overflow-x: hidden;
+        }
+        
+        .products-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); 
+            gap: 30px; 
+            align-items: stretch;
+            padding: 20px;
+        }
+        
+        .product-card { 
+            display: flex; 
+            flex-direction: column; 
+            background: #0b0b0b; 
+            border-radius: 16px; 
+            padding: 20px; 
+            height: 100%; 
+            border: 1px solid #222; 
+            transition: 0.3s;
+            margin-bottom: 20px;
+        }
+        
+        .product-card:hover { 
+            border-color: red; 
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.2); 
+        }
+        
+        .product-card img { 
+            width: 100%; 
+            height: 220px; 
+            object-fit: contain; 
+            background: #fff; 
+            border-radius: 12px; 
+            padding: 10px; 
+        }
+        
+        .product-info { 
+            flex: 1; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: center; 
+            text-align: center; 
+            padding: 15px 0;
+        }
+        
+        .product-name { 
+            font-family: 'Audiowide', sans-serif; 
+            margin-bottom: 10px; 
+            min-height: 70px; 
+            display: -webkit-box; 
+            -webkit-line-clamp: 3; 
+            -webkit-box-orient: vertical; 
+            overflow: hidden;
+            font-size: 1.2rem;
+        }
+        
+        .product-price { 
+            color: red; 
+            font-size: 1.6rem; 
+            font-weight: bold; 
+            margin-bottom: 10px; 
+        }
+        
+        .reserve-btn { 
+            background: red; 
+            border: none; 
+            padding: 14px; 
+            border-radius: 10px; 
+            color: #fff; 
+            font-weight: bold; 
+            cursor: pointer; 
+            margin-top: auto;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+        
+        .reserve-btn:hover {
+            background: #cc0000;
+            transform: translateY(-2px);
+        }
+        
+        /* Modal Responsive */
+        .modal { 
+            display: none; 
+            position: fixed; 
+            z-index: 9999; 
+            left: 0; 
+            top: 0; 
+            width: 100%; 
+            height: 100%; 
+            background-color: rgba(0,0,0,0.85); 
+            backdrop-filter: blur(8px); 
+        }
+        
+        .modal-content { 
+            background-color: #111; 
+            margin: 5% auto; 
+            padding: 25px; 
+            border: 2px solid red; 
+            width: 90%; 
+            max-width: 450px; 
+            max-height: 90vh; 
+            overflow-y: auto; 
+            border-radius: 15px; 
+            color: white; 
+            font-family: 'Orbitron', sans-serif; 
+            position: relative; 
+        }
+        
+        .modal-content::-webkit-scrollbar { 
+            width: 5px; 
+        }
+        
+        .modal-content::-webkit-scrollbar-thumb { 
+            background: red; 
+            border-radius: 10px; 
+        }
+        
+        #reservationForm label { 
+            display: block; 
+            margin-top: 15px; 
+            font-size: 0.8rem; 
+            color: #ccc; 
+        }
+        
+        #reservationForm input, #reservationForm select { 
+            width: 100%; 
+            padding: 12px; 
+            margin-top: 5px; 
+            background: #1a1a1a; 
+            border: 1px solid #333; 
+            color: white; 
+            border-radius: 8px; 
+            box-sizing: border-box; 
+            font-family: 'Orbitron', sans-serif;
+        }
+        
+        .submit-res-btn { 
+            width: 100%; 
+            background: red; 
+            color: white; 
+            padding: 15px; 
+            border: none; 
+            font-weight: bold; 
+            cursor: pointer; 
+            border-radius: 8px; 
+            margin-top: 25px; 
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+        
+        .submit-res-btn:hover {
+            background: #cc0000;
+        }
+        
+        .selection-row { 
+            display: flex; 
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .selection-row div { 
+            flex: 1;
+            min-width: 150px;
+        }
+        
+        .stock-tag {
+            background: rgba(255, 0, 0, 0.1);
+            color: #00ff00;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 0.8rem;
+            display: inline-block;
+            margin-bottom: 10px;
+            border: 1px solid #00ff0033;
+        }
+        
+        /* Products Section Title */
+        .products-section h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin: 100px 0 40px;
+            color: #fff;
+            font-family: 'Audiowide', sans-serif;
+            padding: 0 20px;
+        }
+        
+        /* Mobile Navigation */
+        .mobile-menu-btn {
+            display: none;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 10px;
+        }
+        
+        .close-menu-btn {
+            display: none;
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 28px;
+            cursor: pointer;
+            z-index: 1001;
+        }
+        
+        /* Mobile Search Toggle */
+        .mobile-search-btn {
+            display: none;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 10px;
+        }
+        
+        .mobile-search-container {
+            display: none;
+            width: 100%;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.95);
+        }
+        
+        .mobile-search-input {
+            width: 100%;
+            padding: 12px 15px;
+            border-radius: 8px;
+            border: 1px solid red;
+            background: #111;
+            color: white;
+            font-family: 'Orbitron', sans-serif;
+        }
+        
+        /* Responsive Grid Adjustments */
+        @media (max-width: 1200px) {
+            .products-grid {
+                gap: 25px;
+                padding: 15px;
+            }
+        }
+        
+        @media (max-width: 992px) {
+            .products-grid {
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 20px;
+            }
+            
+            .product-card {
+                padding: 15px;
+            }
+            
+            .product-name {
+                font-size: 1.1rem;
+                min-height: 60px;
+            }
+            
+            .product-price {
+                font-size: 1.4rem;
+            }
+            
+            .products-section h2 {
+                font-size: 2.2rem;
+                margin: 90px 0 30px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            /* Show Mobile Menu Button */
+            .mobile-menu-btn {
+                display: block;
+            }
+            
+            .mobile-search-btn {
+                display: block;
+            }
+            
+            /* Hide Desktop Navigation Menu */
+            .nav-menu {
+                position: fixed;
+                top: 0;
+                right: -100%;
+                width: 280px;
+                height: 100vh;
+                background: rgba(0, 0, 0, 0.95);
+                backdrop-filter: blur(15px);
+                display: flex;
+                flex-direction: column;
+                padding: 80px 30px 30px;
+                transition: right 0.3s ease;
+                z-index: 1000;
+                border-left: 2px solid red;
+                overflow-y: auto;
+            }
+            
+            .nav-menu.active {
+                right: 0;
+            }
+            
+            .nav-menu li {
+                margin: 10px 0;
+                width: 100%;
+            }
+            
+            .nav-menu li a {
+                display: block;
+                padding: 15px;
+                width: 100%;
+                text-align: left;
+            }
+            
+            .dropdown-menu {
+                position: static;
+                background: rgba(30, 30, 30, 0.95);
+                border: 1px solid #444;
+                box-shadow: none;
+                margin: 10px 0;
+                width: 100%;
+            }
+            
+            .close-menu-btn {
+                display: block;
+            }
+            
+            /* Products Grid */
+            .products-grid {
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 15px;
+            }
+            
+            .product-card img {
+                height: 180px;
+            }
+            
+            .product-name {
+                font-size: 1rem;
+                min-height: 50px;
+            }
+            
+            .product-price {
+                font-size: 1.3rem;
+            }
+            
+            .products-section h2 {
+                font-size: 1.8rem;
+                margin: 80px 0 25px;
+            }
+            
+            /* Modal Adjustments */
+            .modal-content {
+                margin: 10% auto;
+                padding: 20px;
+                width: 95%;
+            }
+            
+            .selection-row {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .selection-row div {
+                min-width: 100%;
+            }
+        }
+        
+        @media (max-width: 576px) {
+            /* Navbar Adjustments */
+            .nav {
+                padding: 15px 20px;
+            }
+            
+            .nav-logo {
+                width: 50px;
+                height: 50px;
+            }
+            
+            .nav-title {
+                font-size: 20px;
+            }
+            
+            /* Products Grid */
+            .products-grid {
+                grid-template-columns: 1fr;
+                max-width: 400px;
+                margin: 0 auto;
+            }
+            
+            .product-card {
+                max-width: 100%;
+                margin: 0 auto 15px;
+            }
+            
+            .products-section h2 {
+                font-size: 1.6rem;
+                margin: 70px 0 20px;
+            }
+            
+            /* Modal Full Screen on Small Devices */
+            .modal-content {
+                margin: 0;
+                width: 100%;
+                height: 100%;
+                max-width: none;
+                max-height: none;
+                border-radius: 0;
+                border: none;
+                padding: 60px 20px 20px;
+            }
+            
+            .close-modal {
+                font-size: 36px;
+                position: fixed;
+                top: 20px;
+                right: 20px;
+            }
+        }
+        
+        @media (max-width: 400px) {
+            .products-grid {
+                padding: 10px;
+            }
+            
+            .product-card {
+                padding: 12px;
+            }
+            
+            .product-card img {
+                height: 160px;
+            }
+            
+            .product-name {
+                font-size: 0.95rem;
+            }
+            
+            .product-price {
+                font-size: 1.2rem;
+            }
+            
+            .reserve-btn {
+                padding: 12px;
+                font-size: 0.9rem;
+            }
+            
+            .products-section h2 {
+                font-size: 1.4rem;
+            }
+        }
+        
+        /* Filter Buttons for Mobile */
+        .filter-buttons {
+            display: none;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 0 20px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-btn {
+            padding: 8px 16px;
+            background: rgba(255, 0, 0, 0.1);
+            border: 1px solid red;
+            color: white;
+            border-radius: 20px;
+            cursor: pointer;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+        }
+        
+        .filter-btn.active {
+            background: red;
+        }
+        
+        @media (max-width: 768px) {
+            .filter-buttons {
+                display: flex;
+            }
+        }
+        
+        /* Loading Animation for Mobile */
+        .loading {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .loading.active {
+            display: flex;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid #333;
+            border-top: 3px solid red;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Back to Top Button */
+        .back-to-top {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 50px;
+            height: 50px;
+            background: red;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            font-size: 20px;
+            z-index: 100;
+            transition: all 0.3s ease;
+        }
+        
+        .back-to-top:hover {
+            background: #cc0000;
+            transform: translateY(-3px);
+        }
+        
+        @media (max-width: 768px) {
+            .back-to-top {
+                bottom: 20px;
+                right: 20px;
+                width: 45px;
+                height: 45px;
+                font-size: 18px;
+            }
+        }
+    </style>
+</head>
+
+<body class="main-page">
+
+<!-- Loading Overlay -->
+<div class="loading" id="loadingOverlay">
+    <div class="spinner"></div>
+</div>
+
+<!-- Back to Top Button -->
+<button class="back-to-top" id="backToTop">
+    <i class="fas fa-arrow-up"></i>
+</button>
+
+<nav class="nav">
+    <div class="nav-left">
+        <img src="images/589828036_1222267966428855_4924886836244892648_n-removebg-preview.png" class="nav-logo">
+        <span class="nav-title">RIDERSHUB</span>
+    </div>
+    
+    <!-- Mobile Menu Button -->
+    <button class="mobile-menu-btn" id="mobileMenuBtn">
+        <i class="fas fa-bars"></i>
+    </button>
+    
+    <!-- Mobile Search Button -->
+    <button class="mobile-search-btn" id="mobileSearchBtn">
+        <i class="fas fa-search"></i>
+    </button>
+    
+    <ul class="nav-menu" id="navMenu">
+        <!-- Close Button for Mobile -->
+        <button class="close-menu-btn" id="closeMenuBtn">
+            <i class="fas fa-times"></i>
+        </button>
+        
+        <li><a href="#home">HOME</a></li>
+        <li class="dropdown">
+            <a href="#">PRODUCTS ▾</a>
+            <ul class="dropdown-menu" id="brandMenu">
+                <li><a href="#all" data-brand="all">ALL</a></li>
+                <?php
+                $nav_brands = $conn->query("SELECT * FROM brands ORDER BY brand_name ASC");
+                if($nav_brands && $nav_brands->num_rows > 0):
+                    while($row = $nav_brands->fetch_assoc()): 
+                        $b_name = $row['brand_name'];
+                ?>
+                    <li><a href="#<?= strtolower($b_name) ?>" data-brand="<?= strtolower($b_name) ?>"><?= strtoupper($b_name) ?></a></li>
+                <?php 
+                    endwhile;
+                endif; 
+                ?>
+            </ul>
+        </li>
+        <li class="dropdown">
+            <a href="#">HELMET TYPE ▾</a>
+            <ul class="dropdown-menu">
+                <li><a href="#type-all">ALL</a></li>
+                <li><a href="#type-full-face">FULL FACE</a></li>
+                <li><a href="#type-modular">MODULAR</a></li>
+                <li><a href="#type-half-face">HALF FACE</a></li>
+            </ul>
+        </li>
+        <li><a href="logout.php" onclick="return confirm('Logout now?')">Logout</a></li>
+    </ul>
+</nav>
+
+<!-- Mobile Search Container -->
+<div class="mobile-search-container" id="mobileSearchContainer">
+    <input type="text" class="mobile-search-input" placeholder="Search products..." id="mobileSearchInput">
+</div>
+
+<!-- Filter Buttons for Mobile -->
+<div class="filter-buttons" id="filterButtons">
+    <button class="filter-btn active" data-filter="all">ALL</button>
+    <button class="filter-btn" data-filter="brand">BRANDS</button>
+    <button class="filter-btn" data-filter="type">TYPES</button>
+</div>
+
+<section class="products-section" id="products">
+    <h2>Featured Helmets</h2>
+    <div class="products-grid">
+        <?php while($p = $products->fetch_assoc()): 
+            // Convert helmet type to a filter-friendly format
+            $helmet_type_for_filter = strtolower(str_replace(' ', '-', $p['helmet_type']));
+        ?>
+            <div class="product-card" 
+                 data-brand="<?= strtolower($p['brand_name']) ?>" 
+                 data-helmet-type="<?= $helmet_type_for_filter ?>"
+                 data-name="<?= strtolower(htmlspecialchars($p['name'])) ?>">
+                <img src="uploads/<?= $p['image'] ?>" alt="<?= htmlspecialchars($p['name']) ?>">
+                <div class="product-info">
+                    <h3 class="product-name"><?= htmlspecialchars($p['name']) ?></h3>
+                    <p class="product-price">₱<?= number_format($p['price'], 2) ?></p>
+                    <!-- Hidden element to store helmet type for JavaScript detection -->
+                    <span class="helmet-type-text" style="display:none;"><?= htmlspecialchars($p['helmet_type']) ?></span>
+                </div>
+                <button class="reserve-btn" 
+                        data-name="<?= htmlspecialchars($p['name']) ?>" 
+                        data-id="<?= $p['id'] ?>"
+                        data-colors="<?= htmlspecialchars($p['colors'] ?? 'Standard') ?>"
+                        data-sizes="<?= htmlspecialchars($p['sizes'] ?? 'One Size') ?>"
+                        data-stock="<?= isset($p['quantity']) ? $p['quantity'] : (isset($p['stock']) ? $p['stock'] : 0 ) ?>"> 
+                    RESERVE
+                </button>
+            </div>
+        <?php endwhile; ?>
+    </div>
+</section>
+
+<div id="reserveModal" class="modal">
+    <div class="modal-content">
+        <span class="close-modal" style="float:right; cursor:pointer; font-size:28px;">&times;</span>
+        <h2 style="font-family: 'Audiowide'; color: white;">RESERVATION</h2>
+        <p id="modalProductName" style="color: red; font-size: 14px; margin-bottom: 5px;"></p>
+        <div id="modalStockDisplay" class="stock-tag">Available Stock: 0</div> 
+        <form id="reservationForm">
+            <input type="hidden" name="product_id" id="modalProductId">
+            
+            <label>FULL NAME</label>
+            <input type="text" name="customer_name" required placeholder="Juan Dela Cruz">
+            
+            <label>CONTACT NUMBER</label>
+            <input type="tel" name="phone" required placeholder="09123456789">
+
+            <div class="selection-row">
+                <div>
+                    <label>COLOR</label>
+                    <select name="selected_color" id="modalColor" required></select>
+                </div>
+                <div>
+                    <label>SIZE</label>
+                    <select name="selected_size" id="modalSize" required></select>
+                </div>
+            </div>
+
+            <label>QUANTITY</label>
+            <input type="number" name="quantity" id="modalQuantity" min="1" value="1" required>
+
+            <label>TARGET PICKUP DATE</label>
+            <input type="date" name="pickup_date" required>
+            
+            <button type="submit" class="submit-res-btn">CONFIRM RESERVATION</button>
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const cards = document.querySelectorAll(".product-card");
+    const modal = document.getElementById("reserveModal");
+    const closeModal = document.querySelector(".close-modal");
+    const modalProductName = document.getElementById("modalProductName");
+    const modalStockDisplay = document.getElementById("modalStockDisplay");
+    const modalProductId = document.getElementById("modalProductId");
+    const modalColor = document.getElementById("modalColor");
+    const modalSize = document.getElementById("modalSize");
+    const modalQuantity = document.getElementById("modalQuantity");
+    const reservationForm = document.getElementById("reservationForm");
+    const mobileMenuBtn = document.getElementById("mobileMenuBtn");
+    const navMenu = document.getElementById("navMenu");
+    const closeMenuBtn = document.getElementById("closeMenuBtn");
+    const mobileSearchBtn = document.getElementById("mobileSearchBtn");
+    const mobileSearchContainer = document.getElementById("mobileSearchContainer");
+    const mobileSearchInput = document.getElementById("mobileSearchInput");
+    const filterButtons = document.querySelectorAll(".filter-btn");
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    const backToTopBtn = document.getElementById("backToTop");
+    
+    // Mobile Menu Toggle
+    mobileMenuBtn.addEventListener('click', () => {
+        navMenu.classList.add('active');
+        document.body.style.overflow = 'hidden';
+    });
+    
+    closeMenuBtn.addEventListener('click', () => {
+        navMenu.classList.remove('active');
+        document.body.style.overflow = '';
+    });
+    
+    // Close menu when clicking outside on mobile
+    document.addEventListener('click', (e) => {
+        if (window.innerWidth <= 768) {
+            if (!navMenu.contains(e.target) && !mobileMenuBtn.contains(e.target)) {
+                navMenu.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+        }
+    });
+    
+    // Mobile Search Toggle
+    mobileSearchBtn.addEventListener('click', () => {
+        mobileSearchContainer.style.display = mobileSearchContainer.style.display === 'block' ? 'none' : 'block';
+        if (mobileSearchContainer.style.display === 'block') {
+            mobileSearchInput.focus();
+        }
+    });
+    
+    // Mobile Search Functionality
+    mobileSearchInput.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.toLowerCase().trim();
+        
+        cards.forEach(card => {
+            const productName = card.getAttribute('data-name').toLowerCase();
+            const brandName = card.getAttribute('data-brand').toLowerCase();
+            const displayCard = productName.includes(searchTerm) || 
+                               brandName.includes(searchTerm) || 
+                               searchTerm === '';
+            
+            card.style.display = displayCard ? 'flex' : 'none';
+        });
+    });
+    
+    // Mobile Filter Buttons
+    filterButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Remove active class from all buttons
+            filterButtons.forEach(b => b.classList.remove('active'));
+            // Add active class to clicked button
+            btn.classList.add('active');
+            
+            // Show loading for mobile
+            if (window.innerWidth <= 768) {
+                loadingOverlay.classList.add('active');
+                setTimeout(() => {
+                    loadingOverlay.classList.remove('active');
+                }, 300);
+            }
+        });
+    });
+    
+    // Back to Top Button
+    window.addEventListener('scroll', () => {
+        if (window.pageYOffset > 300) {
+            backToTopBtn.style.display = 'flex';
+        } else {
+            backToTopBtn.style.display = 'none';
+        }
+    });
+    
+    backToTopBtn.addEventListener('click', () => {
+        window.scrollTo({
+            top: 0,
+            behavior: 'smooth'
+        });
+    });
+    
+    // Function to filter products based on URL hash
+    let currentBrand = "all";
+let currentType = "all";
+
+function filterProducts() {
+    const hash = window.location.hash.replace("#", "") || "all";
+
+    // detect filter source
+    if (hash.startsWith("type-")) {
+        currentType = hash.replace("type-", "");
+    } else {
+        currentBrand = hash;
+    }
+
+    cards.forEach(card => {
+        const cardBrand = card.dataset.brand;
+        const cardType  = card.dataset.helmetType;
+
+        let matchBrand = (currentBrand === "all" || cardBrand === currentBrand);
+        let matchType  = (currentType === "all" || cardType === currentType);
+
+        // BOTH must be true
+        card.style.display = (matchBrand && matchType) ? "flex" : "none";
+    });
+
+    if (window.innerWidth <= 768) {
+        loadingOverlay.classList.add('active');
+        setTimeout(() => loadingOverlay.classList.remove('active'), 300);
+    }
+}
+
+window.addEventListener("hashchange", filterProducts);
+filterProducts();
+
+
+    
+    // Apply filtering on hash change and initial load
+    window.addEventListener("hashchange", filterProducts);
+    filterProducts(); // Initial filter on page load
+    
+    // Function to detect helmet type from product name (fallback)
+    function detectHelmetTypeFromName(productName) {
+        const name = productName.toLowerCase();
+        
+        if (name.includes('full') || name.includes('full-face') || name.includes('fullface')) return 'full-face';
+        if (name.includes('modular')) return 'modular';
+        if (name.includes('half') || name.includes('half-face') || name.includes('halfface')) return 'half-face';
+        if (name.includes('open') || name.includes('open-face') || name.includes('openface')) return 'open-face';
+        if (name.includes('off') || name.includes('off-road') || name.includes('dirt') || name.includes('motocross')) return 'off-road';
+        
+        return 'full-face'; // default
+    }
+    
+    // Ensure all cards have helmet type data (fallback for existing cards)
+    document.querySelectorAll('.product-card').forEach(card => {
+        if (!card.dataset.helmetType) {
+            const productName = card.querySelector('.brand_name')?.innerText || '';
+            const helmetType = detectHelmetTypeFromName(productName);
+            card.setAttribute('data-helmet-type', helmetType);
+        }
+    });
+    
+    // Modal functionality
+    document.querySelectorAll('.reserve-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const rawStock = this.getAttribute('data-stock');
+            const stockCount = parseInt(rawStock) || 0;
+            
+            modalProductName.innerText = "Item: " + this.getAttribute('data-name');
+            modalProductId.value = this.getAttribute('data-id');
+            
+            // Update Stock Display
+            modalStockDisplay.innerText = "Available Stock: " + stockCount;
+            
+            // Handle stock availability
+            if(stockCount > 0) {
+                modalQuantity.max = stockCount;
+                modalQuantity.value = Math.min(1, stockCount);
+                modalQuantity.disabled = false;
+                document.querySelector('.submit-res-btn').disabled = false;
+                document.querySelector('.submit-res-btn').style.opacity = '1';
+            } else {
+                modalQuantity.max = 0;
+                modalQuantity.value = 0;
+                modalQuantity.disabled = true;
+                document.querySelector('.submit-res-btn').disabled = true;
+                document.querySelector('.submit-res-btn').style.opacity = '0.5';
+            }
+            
+            // Populate Colors
+            const colors = this.getAttribute('data-colors').split(',');
+            modalColor.innerHTML = '';
+            colors.forEach(c => {
+                let opt = document.createElement('option');
+                opt.value = opt.text = c.trim();
+                modalColor.add(opt);
+            });
+            
+            // Populate Sizes
+            const sizes = this.getAttribute('data-sizes').split(',');
+            modalSize.innerHTML = '';
+            sizes.forEach(s => {
+                let opt = document.createElement('option');
+                opt.value = opt.text = s.trim();
+                modalSize.add(opt);
+            });
+            
+            modal.style.display = "block";
+            document.body.style.overflow = 'hidden';
+        });
+    });
+    
+    closeModal.onclick = () => {
+        modal.style.display = "none";
+        document.body.style.overflow = '';
+    };
+    
+    window.onclick = (e) => { 
+        if (e.target == modal) {
+            modal.style.display = "none";
+            document.body.style.overflow = '';
+        }
+    };
+    
+    // Close modal on escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            modal.style.display = "none";
+            document.body.style.overflow = '';
+            
+            if (window.innerWidth <= 768) {
+                navMenu.classList.remove('active');
+            }
+        }
+    });
+    
+    reservationForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const currentStock = parseInt(modalQuantity.max);
+        if (parseInt(modalQuantity.value) > currentStock || currentStock === 0) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Out of Stock',
+                text: 'This item is currently unavailable for reservation.',
+                background: '#111', 
+                color: '#fff'
+            });
+            return;
+        }
+        
+        const formData = new FormData(this);
+        fetch('process_reservation.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(data.success) {
+                modal.style.display = "none";
+                document.body.style.overflow = '';
+                reservationForm.reset();
+                Swal.fire({
+                    title: 'RESERVATION SUCCESS!',
+                    background: '#111',
+                    color: '#fff',
+                    icon: 'success',
+                    iconColor: '#ff0000',
+                    confirmButtonColor: '#ff0000',
+                    html: `
+                        <div style="font-family: 'Orbitron', sans-serif; text-align: center;">
+                            <p style="margin-bottom: 10px;">Show this ticket to the staff:</p>
+                            <h1 style="color: red; letter-spacing: 3px; font-size: 40px; border: 1px dashed red; padding: 10px;">${data.ticket}</h1>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 15px;">Please take a screenshot for your records.</p>
+                        </div>
+                    `
+                });
+            } else {
+                Swal.fire({ 
+                    icon: 'error', 
+                    title: 'Oops...', 
+                    text: data.message || 'Something went wrong!', 
+                    background: '#111', 
+                    color: '#fff' 
+                });
+            }
+        });
+    });
+    
+    // Responsive adjustments on window resize
+    window.addEventListener('resize', () => {
+        if (window.innerWidth > 768) {
+            navMenu.classList.remove('active');
+            document.body.style.overflow = '';
+            mobileSearchContainer.style.display = 'none';
+        }
+    });
+    
+    // Improve dropdown menus for touch devices
+    if ('ontouchstart' in window) {
+        document.querySelectorAll('.dropdown > a').forEach(dropdown => {
+            dropdown.addEventListener('click', function(e) {
+                if (window.innerWidth <= 768) {
+                    e.preventDefault();
+                    const menu = this.nextElementSibling;
+                    menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+                }
+            });
+        });
+    }
+});
+</script>
+</body>
+</html>
+
+<?php
+
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+
+session_start();
+require_once "config.php";
+
+header('Content-Type: application/json');
+
+if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true){
+    echo json_encode(['success' => false, 'message' => 'Please login first']);
+    exit;
+}
+
+$action = $_POST['action'] ?? '';
+
+if($action === 'add_to_cart') {
+    $product_id = intval($_POST['product_id'] ?? 0);
+    $color = $_POST['color'] ?? '';
+    $size = $_POST['size'] ?? '';
+    $quantity = intval($_POST['quantity'] ?? 1);
+    
+    if($product_id <= 0 || $quantity <= 0) {
+        echo json_encode(['success' => false, 'message' => 'Invalid product or quantity']);
+        exit;
+    }
+    
+    // Check product availability
+    $stmt = $conn->prepare("SELECT id, name, price, image, quantity as stock FROM products WHERE id = ? AND status = 'active'");
+    $stmt->bind_param("i", $product_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    if($result->num_rows === 0) {
+        echo json_encode(['success' => false, 'message' => 'Product not found']);
+        exit;
+    }
+    
+    $product = $result->fetch_assoc();
+    
+    if($product['stock'] < $quantity) {
+        echo json_encode(['success' => false, 'message' => 'Insufficient stock']);
+        exit;
+    }
+    
+    // Initialize cart if not exists
+    if(!isset($_SESSION['cart'])) {
+        $_SESSION['cart'] = [];
+    }
+    
+    // Create cart item key based on product_id, color, and size
+    $cart_key = $product_id . '_' . $color . '_' . $size;
+    
+    if(isset($_SESSION['cart'][$cart_key])) {
+        // Update existing item
+        $_SESSION['cart'][$cart_key]['quantity'] += $quantity;
+    } else {
+        // Add new item
+        $_SESSION['cart'][$cart_key] = [
+            'id' => $product_id,
+            'name' => $product['name'],
+            'price' => $product['price'],
+            'image' => $product['image'],
+            'color' => $color,
+            'size' => $size,
+            'quantity' => $quantity
+        ];
+    }
+    
+    // Calculate total cart count
+    $cart_count = 0;
+    foreach($_SESSION['cart'] as $item) {
+        $cart_count += $item['quantity'];
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'message' => 'Item added to cart',
+        'cart_count' => $cart_count
+    ]);
+    
+}
+else if($action === 'checkout') {
+
+    if(empty($_SESSION['cart'])) {
+        echo json_encode(['success'=>false,'message'=>'Cart is empty']);
+        exit;
+    }
+
+    $item = array_values($_SESSION['cart'])[0];
+
+    $stmt = $conn->prepare("SELECT id, name, quantity as stock FROM products WHERE id=?");
+    $stmt->bind_param("i", $item['id']);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    if(!$result->num_rows){
+        echo json_encode(['success'=>false,'message'=>'Product missing']);
+        exit;
+    }
+
+    $p = $result->fetch_assoc();
+
+    echo json_encode([
+        'success'=>true,
+        'id'=>$p['id'],
+        'name'=>$p['name'],
+        'colors'=>$item['color'],   // FROM CART
+        'sizes'=>$item['size'],     // FROM CART
+        'stock'=>$p['stock']
+    ]);
+    exit;
+}
+
+
+ else {
+    echo json_encode(['success' => false, 'message' => 'Invalid action']);
+}
+?>

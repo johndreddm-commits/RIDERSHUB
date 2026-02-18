@@ -1,0 +1,4 @@
+# Ignore sensitive files
+config.php
+*.log
+.vscode/

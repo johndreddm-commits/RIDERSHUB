@@ -1,0 +1,561 @@
+/* ===============================
+   GLOBAL STYLES
+================================ */
+:root {
+    --primary: #ff3b30; /* Red from image */
+    --dark: #1a1a1a;
+    --light: #f8f9fa;
+    --gray: #6c757d;
+    --border: #eaeaea;
+}
+
+body {
+    background-color: #ffffff;
+    font-family: 'Orbitron', sans-serif;
+    color: #333;
+    line-height: 1.6;
+}
+
+h1, h2, h3, h4, h5 {
+    font-weight: 700;
+    color: var(--dark);
+}
+
+.card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+}
+
+.card-header {
+    background: var(--light);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    padding: 1rem 1.25rem;
+}
+
+/* ===============================
+   NAVBAR (Matches RIDERSHUB from image)
+================================ */
+.navbar {
+    background: var(--dark) !important;
+    box-shadow: 0 2px 15px rgba(0,0,0,0.1);
+    padding: 0.8rem 0;
+}
+
+.navbar-brand {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: #ffffff !important;
+    letter-spacing: 1px;
+}
+
+.navbar-brand .brand-text {
+    color: var(--primary);
+    text-transform: uppercase;
+}
+
+.nav-link {
+    color: rgba(255,255,255,0.85) !important;
+    font-weight: 500;
+    padding: 0.5rem 1rem !important;
+    margin: 0 0.2rem;
+    transition: all 0.3s ease;
+}
+
+.nav-link:hover {
+    color: #ffffff !important;
+    background: rgba(255,255,255,0.1);
+    border-radius: 6px;
+}
+
+.nav-link.active {
+    background: var(--primary) !important;
+    color: #ffffff !important;
+    border-radius: 6px;
+}
+
+.navbar-nav .nav-item:last-child .nav-link {
+    background: var(--primary);
+    border-radius: 6px;
+    padding: 0.5rem 1.5rem !important;
+    margin-left: 0.5rem;
+}
+
+/* ===============================
+   HERO / FEATURED HELMETS SECTION
+================================ */
+.hero-section {
+    background: linear-gradient(rgba(26,26,26,0.9), rgba(26,26,26,0.95)), url('https://images.unsplash.com/photo-1558618666-fcd25c85cd64?ixlib=rb-4.0.3&auto=format&fit=crop&w=1920&q=80');
+    background-size: cover;
+    background-position: center;
+    color: white;
+    padding: 4rem 0;
+    margin-bottom: 3rem;
+}
+
+.hero-title {
+    font-size: 3.5rem;
+    font-weight: 800;
+    margin-bottom: 1rem;
+    text-transform: uppercase;
+}
+
+.hero-subtitle {
+    font-size: 1.2rem;
+    opacity: 0.9;
+    margin-bottom: 2rem;
+}
+
+/* ===============================
+   DASHBOARD STATS
+================================ */
+.stat-card {
+    border-radius: 12px;
+    transition: transform 0.2s ease;
+    border-left: 4px solid var(--primary);
+}
+
+.stat-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 20px rgba(255,59,48,0.15);
+}
+
+/* ===============================
+   INVENTORY HEADER
+================================ */
+.inventory-header {
+    background: var(--light);
+    padding: 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+    border: 1px solid var(--border);
+}
+
+.inventory-title {
+    font-weight: 700;
+    color: var(--dark);
+    font-size: 1.8rem;
+}
+
+/* ===============================
+   STATS CARDS (TOP RIGHT)
+================================ */
+.stats-card {
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    border: 1px solid var(--border);
+}
+
+/* ===============================
+   FILTERS
+================================ */
+.search-box {
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    padding: 0.75rem 1rem;
+    transition: all 0.3s ease;
+}
+
+.search-box:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 0.2rem rgba(255,59,48,0.25);
+}
+
+.filter-btn {
+    border-radius: 8px;
+    background: var(--light);
+    border: 1px solid var(--border);
+    color: var(--dark);
+    font-weight: 500;
+    padding: 0.75rem 1.5rem;
+    transition: all 0.3s ease;
+}
+
+.filter-btn:hover {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
+/* ===============================
+   INVENTORY GRID / PRODUCT CARDS
+================================ */
+.product-card,
+.inventory-grid .card {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.inventory-grid .card-body,
+.card.h-100 .card-body {
+    display: flex;
+    flex-direction: column;
+    padding: 1.25rem;
+}
+
+.card-title {
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    color: var(--dark);
+    font-size: 1.25rem;
+}
+
+.card-text {
+    color: var(--gray);
+    margin-bottom: 1rem;
+    flex-grow: 1;
+}
+
+.card-price {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--primary);
+    margin-bottom: 1rem;
+}
+
+/* ===============================
+   PRODUCT IMAGE FIX (IMPORTANT)
+================================ */
+.product-image,
+.product-img-wrapper {
+    width: 100%;
+    height: 220px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    object-fit: contain;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.product-image img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    transition: transform 0.3s ease;
+}
+
+.product-card:hover .product-image img {
+    transform: scale(1.05);
+}
+
+.product-image i {
+    font-size: 64px;
+    color: #adb5bd;
+}
+
+/* ===============================
+   BRAND BADGE
+================================ */
+.brand-badge {
+    background: var(--dark);
+    color: #fff;
+    font-size: 0.75rem;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+/* ===============================
+   STOCK STATUS
+================================ */
+.stock-indicator {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 0.8rem;
+    display: inline-block;
+}
+
+.stock-high {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.stock-low {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+}
+
+.stock-out {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* ===============================
+   BUTTONS
+================================ */
+.btn-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    border-radius: 8px;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.btn-primary:hover {
+    background: #e0352c;
+    border-color: #e0352c;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255,59,48,0.3);
+}
+
+.btn-outline-primary {
+    color: var(--primary);
+    border-color: var(--primary);
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+.btn-outline-primary:hover {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+.quantity-input {
+    width: 70px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    padding: 0.5rem;
+    text-align: center;
+}
+
+.btn-update {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+    font-weight: 600;
+    transition: background 0.2s ease;
+}
+
+.btn-update:hover {
+    background: #e0352c;
+    transform: translateY(-1px);
+}
+
+/* ===============================
+   NO PRODUCTS STATE
+================================ */
+.no-products {
+    text-align: center;
+    padding: 4rem 2rem;
+    border-radius: 16px;
+    background: var(--light);
+    border: 2px dashed var(--border);
+}
+
+.no-products i {
+    font-size: 4rem;
+    color: #adb5bd;
+    margin-bottom: 1.5rem;
+}
+
+.no-products h3 {
+    color: var(--gray);
+    margin-bottom: 1rem;
+}
+
+/* ===============================
+   MODALS
+================================ */
+.modal-content {
+    border-radius: 16px;
+    border: none;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+}
+
+.modal-header {
+    background: var(--dark);
+    color: #fff;
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    padding: 1.5rem;
+}
+
+.modal-title {
+    font-weight: 700;
+}
+
+/* ===============================
+   PAGINATION
+================================ */
+.pagination .page-link {
+    border-radius: 8px;
+    margin: 0 4px;
+    border: 1px solid var(--border);
+    color: var(--dark);
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.pagination .page-link:hover {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
+.pagination .page-item.active .page-link {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+/* ===============================
+   FOOTER (Based on image style)
+================================ */
+.footer {
+    background: var(--dark);
+    color: rgba(255,255,255,0.8);
+    padding: 3rem 0;
+    margin-top: 4rem;
+}
+
+.footer-title {
+    color: white;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    font-size: 1.2rem;
+}
+
+.footer-links a {
+    color: rgba(255,255,255,0.7);
+    text-decoration: none;
+    display: block;
+    margin-bottom: 0.75rem;
+    transition: color 0.3s ease;
+}
+
+.footer-links a:hover {
+    color: var(--primary);
+}
+
+/* ===============================
+   SWEETALERT DARK THEME
+================================ */
+.swal2-popup {
+    border-radius: 16px !important;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+}
+
+/* ===============================
+   RESPONSIVE
+================================ */
+@media (max-width: 768px) {
+    .hero-title {
+        font-size: 2.5rem;
+    }
+    
+    .inventory-header {
+        text-align: center;
+        padding: 1.25rem;
+    }
+    
+    .stats-card {
+        margin-bottom: 1rem;
+    }
+    
+    .navbar-nav {
+        text-align: center;
+        padding: 1rem 0;
+    }
+    
+    .product-image,
+    .product-img-wrapper {
+        height: 180px;
+    }
+}
+
+@media (max-width: 576px) {
+    .hero-title {
+        font-size: 2rem;
+    }
+    
+    .card-price {
+        font-size: 1.25rem;
+    }
+}
+  .color-dot {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 1px solid #ccc;
+            vertical-align: middle;
+            margin-right: 5px;
+        }
+        .stock-low {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .stock-ok {
+            color: #28a745;
+        }
+        .status-CONFIRMED {
+            background-color: rgba(40, 167, 69, 0.1);
+        }
+        .status-PENDING {
+            background-color: rgba(255, 193, 7, 0.1);
+        }
+        .status-CANCELLED {
+            background-color: rgba(220, 53, 69, 0.1);
+        }
+        .table td {
+            vertical-align: middle;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        /* FIX PARA HINDI MATABON NG MODAL ANG BUTTONS */
+        .modal {
+            z-index: 9999 !important;
+        }
+        .modal-backdrop {
+            z-index: 9990 !important;
+        }
+        /* Status Badge Styles */
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .status-badge.pending {
+            background-color: #ffc107;
+            color: #000;
+        }
+        .status-badge.confirmed {
+            background-color: #28a745;
+            color: #fff;
+        }
+        .status-badge.cancelled {
+            background-color: #dc3545;
+            color: #fff;
+        }
+        /* Button styles */
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
+        }
