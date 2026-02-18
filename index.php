@@ -2538,7 +2538,6 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                         <?= $badge_text ?>
                     </span>
                     
-                    <!-- ✅ FIXED: Changed from 'uploads/' to 'images/' -->
                     <img src="images/<?= htmlspecialchars($p['image'] ?? '') ?>" alt="<?= htmlspecialchars($p['name'] ?? 'Product') ?>">
                     
                     <div class="product-info">
@@ -3135,7 +3134,19 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     method: 'POST',
                     body: new FormData(this)
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text().then(text => {
+                        try {
+                            return JSON.parse(text);
+                        } catch(e) {
+                            console.error('Invalid JSON response:', text);
+                            throw new Error('Server returned invalid JSON');
+                        }
+                    });
+                })
                 .then(data => {
                     if(data.success) {
                         quickCartModal.style.display = "none";
@@ -3174,8 +3185,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     console.error('Error:', error);
                     Swal.fire({ 
                         icon: 'error', 
-                        title: 'Error', 
-                        text: 'Network error. Please try again.', 
+                        title: 'Network Error', 
+                        text: error.message || 'Please try again.', 
                         background: '#111', 
                         color: '#fff',
                         confirmButtonColor: '#ff0000'
@@ -3205,7 +3216,19 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     method: 'POST',
                     body: new FormData(this)
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text().then(text => {
+                        try {
+                            return JSON.parse(text);
+                        } catch(e) {
+                            console.error('Invalid JSON response:', text);
+                            throw new Error('Server returned invalid JSON');
+                        }
+                    });
+                })
                 .then(data => {
                     if(data.success) {
                         modal.style.display = "none";
@@ -3244,8 +3267,8 @@ $low_stock_count = $low_stock_result->fetch_assoc()['low_stock_count'] ?? 0;
                     console.error('Error:', error);
                     Swal.fire({ 
                         icon: 'error', 
-                        title: 'Error', 
-                        text: 'Network error. Please try again.', 
+                        title: 'Network Error', 
+                        text: 'Please try again.', 
                         background: '#111', 
                         color: '#fff',
                         confirmButtonColor: '#ff0000'

@@ -1,9 +1,15 @@
 <?php
+error_reporting(E_ALL);
+ini_set('display_errors', 0); // Set to 0 para hindi lumabas ang errors sa output
+
 session_start();
 require_once 'config.php';
 
 // Set header to return JSON
 header('Content-Type: application/json');
+
+// Clear any output buffering
+ob_clean();
 
 $response = ['success' => false, 'message' => 'Invalid action'];
 
@@ -340,6 +346,8 @@ switch($action) {
         $response = ['success' => false, 'message' => 'Unknown action'];
 }
 
+// Clear output buffer and send JSON
+ob_clean();
 echo json_encode($response);
 exit;
 ?>
